@@ -1,64 +1,158 @@
-# Broadcast Playlist MVP
+# Broadcast Playlist App
 
-리로스쿨 로그인 기반 신청/투표 + 회차 마감 시 `M3U`/`MP3` 아티팩트를 생성하는 최소 동작 MVP입니다.
+리로스쿨 로그인 기반으로 곡 신청, 투표, 회차 마감, 플레이리스트 아티팩트 생성을 처리하는 Python 웹 앱입니다.
 
-## Features
-- 신청/투표 로그인 필수, 목록/결과 조회는 공개
-- 회차 기본 월간(설정으로 주간 전환 가능)
-- 회차당 신청 3개, 투표 3개(중복 곡 투표 불가)
-- 외부 검색 `track_id` 기준 회차 내 중복 신청 방지
-- 수동 마감 + 자동 마감(백그라운드 스케줄러)
-- 40분 목표 길이 초과 시 하위 순위 자동 제외
-- 누락/손상 음원 자동 스킵 후 다음 순위로 대체
-- `M3U` + 합본 `MP3` 생성 (ffmpeg 있으면 인코딩, 없으면 fallback)
+## What It Does
+- 로그인한 사용자만 곡 신청과 투표 가능
+- 현재 월간 회차를 기본으로 운영하고, 관리자에서 주간으로 전환 가능
+- 회차당 신청 3곡, 투표 3곡 제한
+- iTunes Search API로 곡 검색
+- 마감 시 `M3U`와 합본 `MP3` 생성
+- 누락된 음원은 YouTube 후보를 점수화해 `yt-dlp`로 자동 확보 시도
+- 관리자 화면에서 설정 변경, 수동 마감, 관리자 승인, 아티팩트 다운로드, 운영 로그 확인 가능
 
-## Run
+## Requirements
+- Python 3.12+
+- `ffmpeg`
+- `ffprobe`
+- Python dependencies from `requirements.txt`
+
+`ffmpeg`와 `ffprobe`가 없으면 서버가 시작되지 않습니다.
+
+## Quick Start
+의존성 설치 명령은 이 문서 작성 중 다시 실행하지 않았습니다. 현재 워크스페이스에는 이미 설치된 상태였습니다.
+
 ```bash
-python3 main.py
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
 ```
 
-- 사용자 페이지: `http://127.0.0.1:8080/`
-- 신청 페이지: `http://127.0.0.1:8080/submit`
-- 투표 페이지: `http://127.0.0.1:8080/vote`
-- 관리자 페이지: `http://127.0.0.1:8080/admin`
+로컬 개발에서는 mock 인증으로 실행하는 편이 안전합니다.
 
-관리자 승인 계정도 일반 페이지(`/`, `/submit`, `/vote`)를 그대로 사용할 수 있으며, 필요할 때 `/admin`으로 직접 이동하면 됩니다.
+```bash
+RIRO_AUTH_MODE=mock RADIO_PORT=8092 python3 main.py
+```
 
-## Admin bootstrap
-로그인 후 기본 유저는 admin 권한이 없습니다. 첫 관리자 부여와 관리자 전원 잠금 복구는 break-glass 절차로 DB에서 `is_admin_approved=1`을 직접 지정합니다.
+검증된 엔드포인트:
+- `http://127.0.0.1:8092/`
+- `http://127.0.0.1:8092/admin`
+- `http://127.0.0.1:8092/api/health`
+- `http://127.0.0.1:8092/api/public/current-round`
+
+## Verified Commands
+이 문서 기준으로 실제 실행 확인한 명령입니다.
+
+```bash
+RIRO_AUTH_MODE=mock RADIO_PORT=8092 python3 main.py
+curl -sS http://127.0.0.1:8092/api/health
+curl -sS http://127.0.0.1:8092/api/public/current-round
+python3 -m unittest discover -s tests -v
+```
+
+## Auth Modes
+- `RIRO_AUTH_MODE=riro`
+  - 기본값
+  - 실제 리로스쿨 로그인 사용
+- `RIRO_AUTH_MODE=mock`
+  - 로컬 테스트용
+  - 로그인 요청에 `riro_user_key`, `display_name` 사용 가능
+
+## Main Pages
+- `/` : 메인 화면, 현재 순위와 로그인 버튼
+- `/submit` : 신청 화면
+- `/vote` : 투표 화면
+- `/admin` : 관리자 운영 화면
+
+관리자 승인 계정도 일반 사용자 페이지를 그대로 사용할 수 있고, 필요할 때만 `/admin`으로 이동하면 됩니다.
+
+## Main API
+### Public / User
+- `GET /api/health`
+- `GET /api/me`
+- `GET /api/me/votes`
+- `GET /api/public/current-round`
+- `GET /api/public/songs`
+- `GET /api/public/results?round_id=<id>`
+- `POST /api/auth/login`
+- `POST /api/auth/logout`
+- `POST /api/songs/search`
+- `POST /api/submissions`
+- `PUT /api/votes`
+
+### Admin
+- `GET /api/admin/settings/current`
+- `POST /api/admin/settings`
+- `GET /api/admin/users`
+- `POST /api/admin/users/approve`
+- `GET /api/admin/submissions/current`
+- `POST /api/admin/rounds/close`
+- `GET /api/admin/artifacts/latest`
+- `GET /api/admin/artifacts/download?artifact_id=<id>&type=m3u|mp3`
+- `GET /api/admin/audit-logs?limit=20`
+
+관리자 곡 숨김 API는 현재 비활성화되어 있고, 호출 시 `403 submission-hide-disabled`를 반환합니다.
+
+## Environment Variables
+| Variable | Default | Meaning |
+|---|---:|---|
+| `RADIO_HOST` | `127.0.0.1` | bind host |
+| `RADIO_PORT` | `8080` | bind port |
+| `RADIO_DB_PATH` | `data/radio.db` | SQLite path |
+| `RADIO_UPLOADS_DIR` | `uploads` | downloaded audio root |
+| `RADIO_ARTIFACTS_DIR` | `artifacts` | generated playlist root |
+| `RADIO_SESSION_TTL_HOURS` | `24` | session lifetime |
+| `RADIO_TIMEZONE` | `Asia/Seoul` | round window timezone |
+| `RADIO_SEARCH_COUNTRY` | `KR` | iTunes search region |
+| `RIRO_AUTH_MODE` | `riro` | `riro` or `mock` |
+| `RADIO_FFMPEG_PATH` | unset | explicit `ffmpeg` binary or bin dir |
+| `RADIO_SCHEDULER_INTERVAL_SECONDS` | `30` | background scheduler interval |
+| `RADIO_FILE_RETENTION_SECONDS` | `1800` | automatic deletion threshold |
+| `RADIO_YT_DLP_ENABLED` | `1` | YouTube auto-download on/off |
+| `RADIO_SESSION_COOKIE_SECURE` | `0` | add `Secure` to session cookie |
+
+## Audio Pipeline
+- 검색은 iTunes Search API 사용
+- 저장되는 `track_id`는 `itunes:<id>` 형식
+- 회차 마감 시 음원이 없는 곡은 YouTube 검색 후보를 최대 8개까지 비교
+- `Topic`, `official audio`, 업로더/제목 일치도에 가산점 부여
+- `live`, `cover`, `remix`, `karaoke`, `lyrics`, `shorts` 등에 감점 부여
+- 가능한 후보를 내려받아 `audio_assets`에 저장
+- 최종 선택 소스는 `audit_logs`에 `youtube_audio_selected`로 기록
+
+## Retention Policy
+기본적으로 30분이 지나면 다음 항목을 자동 정리합니다.
+- `uploads/` 아래 개별 음원 파일
+- `artifacts/` 아래 회차 결과 파일
+- 해당 파일과 연결된 `audio_assets`, `round_artifacts` DB row
+
+자동 정리를 끄려면 다음처럼 실행합니다.
+
+```bash
+RIRO_AUTH_MODE=mock RADIO_PORT=8093 RADIO_FILE_RETENTION_SECONDS=0 python3 main.py
+```
+
+## Admin Bootstrap
+첫 관리자 부여와 전원 잠금 복구는 break-glass 절차로 DB에서 직접 처리합니다.
 
 ```bash
 python3 - <<'PY'
 import sqlite3
 conn = sqlite3.connect("data/radio.db")
-conn.execute("update users set is_admin_approved = 1 where riro_user_key = ?", ("승인할_riro_user_key",))
+conn.execute(
+    "update users set is_admin_approved = 1 where riro_user_key = ?",
+    ("승인할_riro_user_key",),
+)
 conn.commit()
 print("ok")
 PY
 ```
 
-운영 환경에서 HTTPS를 쓰는 경우 관리자 세션 쿠키는 `RADIO_SESSION_COOKIE_SECURE=1`로 설정하세요.
+이 SQL 패턴은 임시 SQLite DB로 동작 확인했습니다.
 
-## API quick map
-- `POST /api/auth/login` `{riro_id, riro_pw}` (`RIRO_AUTH_MODE=mock`일 때는 `{riro_user_key, display_name}`도 허용)
-- `POST /api/songs/search` `{query, limit}`
-- `POST /api/submissions` `{track_id, title, artist, album_art_url, external_url}` (`spotify_track_id`도 하위 호환으로 허용)
-- `PUT /api/votes` `{submission_ids:[...]}` (최대 3개)
-- `POST /api/admin/rounds/close`
-- `POST /api/admin/settings` `{cadence, playlist_size, target_seconds, loudnorm_enabled}`
-- `GET /api/admin/settings/current`
-- `GET /api/admin/users`
-- `GET /api/admin/submissions/current`
-- `GET /api/admin/audit-logs?limit=20`
-- `GET /api/admin/artifacts/latest`
-- `GET /api/admin/artifacts/download?artifact_id=<id>&type=m3u|mp3`
+## Testing
+```bash
+python3 -m unittest discover -s tests -v
+```
 
-## Notes
-- 로그인은 `ISHS_Wiki/route/riroschoolauth.py` 흐름을 참고한 리로스쿨 인증(`RIRO_AUTH_MODE=riro`)이 기본값입니다.
-- 로컬 테스트가 필요하면 `RIRO_AUTH_MODE=mock`으로 실행하세요.
-- 곡 검색은 iTunes Search API를 사용하며 별도 API 키가 필요 없습니다.
-- 관리자 화면의 신청곡 목록은 현재 읽기 전용이며, 곡 숨김 처리는 비활성화되어 있습니다.
-- YouTube 음원 확보는 이제 `Topic`/공식 업로더 힌트와 제목/가수 매칭 점수로 후보를 정렬한 뒤 내려받습니다.
-- 첫 검색 결과를 무조건 받지 않으며, 더 그럴듯한 후보가 뒤에 있으면 그 후보를 우선 선택합니다.
-- 강한 후보가 실패하면 약한 후보도 fallback으로 시도할 수 있으며, 어떤 소스를 골랐는지는 관리자 운영 로그에서 추적할 수 있습니다.
-- ffmpeg/ffprobe가 설치되어 있으면 더 정확한 길이 계산/합본이 수행됩니다.
+## More
+운영 절차와 장애 대응은 [docs/operations-guide.md](docs/operations-guide.md)를 참고하세요.

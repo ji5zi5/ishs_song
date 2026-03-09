@@ -201,32 +201,28 @@ def merge_mp3_files(
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     ffmpeg = ffmpeg_path or shutil.which("ffmpeg")
-    if ffmpeg:
-        list_file = output_path.with_suffix(".concat.txt")
+    if not ffmpeg:
+        raise RuntimeError("ffmpeg is required for mp3 merge")
 
-        def _quote_concat_path(p: Path) -> str:
-            return str(p.resolve()).replace("'", "'\\''")
+    list_file = output_path.with_suffix(".concat.txt")
 
-        list_file.write_text(
-            "".join(f"file '{_quote_concat_path(p)}'\n" for p in files),
-            encoding="utf-8",
-        )
-        try:
-            cmd = [ffmpeg, "-y", "-f", "concat", "-safe", "0", "-i", str(list_file)]
-            if loudnorm_enabled:
-                cmd += ["-af", "loudnorm=I=-14:TP=-1.5:LRA=11"]
-            cmd += ["-c:a", "libmp3lame", "-b:a", "192k", str(output_path)]
-            proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
-        except FileNotFoundError as exc:
-            raise RuntimeError(f"ffmpeg failed: {exc}") from exc
-        finally:
-            list_file.unlink(missing_ok=True)
-        if proc.returncode != 0:
-            raise RuntimeError(f"ffmpeg failed: {proc.stderr.strip()}")
-        return "merged-with-ffmpeg"
+    def _quote_concat_path(p: Path) -> str:
+        return str(p.resolve()).replace("'", "'\\''")
 
-    # Fallback for environments without ffmpeg: byte concatenation.
-    with output_path.open("wb") as out:
-        for p in files:
-            out.write(p.read_bytes())
-    return "merged-with-byte-concat-fallback"
+    list_file.write_text(
+        "".join(f"file '{_quote_concat_path(p)}'\n" for p in files),
+        encoding="utf-8",
+    )
+    try:
+        cmd = [ffmpeg, "-y", "-f", "concat", "-safe", "0", "-i", str(list_file)]
+        if loudnorm_enabled:
+            cmd += ["-af", "loudnorm=I=-14:TP=-1.5:LRA=11"]
+        cmd += ["-c:a", "libmp3lame", "-b:a", "192k", str(output_path)]
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    except FileNotFoundError as exc:
+        raise RuntimeError(f"ffmpeg failed: {exc}") from exc
+    finally:
+        list_file.unlink(missing_ok=True)
+    if proc.returncode != 0:
+        raise RuntimeError(f"ffmpeg failed: {proc.stderr.strip()}")
+    return "merged-with-ffmpeg"

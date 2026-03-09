@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import shutil
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -15,8 +17,37 @@ from radio_app.scheduler import RoundAutoCloser
 from radio_app.services.music_search import ITunesSearchClient
 
 
+def _resolve_media_binary(binary_name: str, configured_path: str | None = None) -> Path | None:
+    if configured_path:
+        candidate = Path(configured_path)
+        if candidate.is_dir():
+            binary_candidate = candidate / binary_name
+        elif candidate.name == binary_name:
+            binary_candidate = candidate
+        else:
+            binary_candidate = candidate.parent / binary_name
+        if binary_candidate.exists():
+            return binary_candidate.resolve()
+
+    discovered = shutil.which(binary_name)
+    return Path(discovered).resolve() if discovered else None
+
+
+def validate_media_toolchain(cfg: AppConfig) -> tuple[Path, Path]:
+    ffmpeg = _resolve_media_binary("ffmpeg", cfg.ffmpeg_path)
+    ffprobe = _resolve_media_binary("ffprobe", cfg.ffmpeg_path)
+    if ffmpeg is None or ffprobe is None:
+        raise RuntimeError(
+            "ffmpeg and ffprobe are required to run this server. "
+            "Install them or set RADIO_FFMPEG_PATH to the directory/binary location."
+        )
+    return ffmpeg, ffprobe
+
+
 def main() -> None:
     cfg = AppConfig()
+    ffmpeg_path, _ffprobe_path = validate_media_toolchain(cfg)
+    cfg = replace(cfg, ffmpeg_path=str(ffmpeg_path))
     ensure_directories(cfg)
 
     db = DB(path=cfg.db_path)
@@ -29,6 +60,7 @@ def main() -> None:
         db=db,
         artifacts_dir=cfg.artifacts_dir,
         interval_seconds=cfg.scheduler_interval_seconds,
+        file_retention_seconds=cfg.file_retention_seconds,
         ffmpeg_path=cfg.ffmpeg_path,
         uploads_dir=cfg.uploads_dir,
         yt_dlp_enabled=cfg.yt_dlp_enabled,

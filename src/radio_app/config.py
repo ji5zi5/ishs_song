@@ -18,6 +18,7 @@ class AppConfig:
     riro_auth_mode: str = os.getenv("RIRO_AUTH_MODE", "riro")
     ffmpeg_path: str | None = os.getenv("RADIO_FFMPEG_PATH")
     scheduler_interval_seconds: int = int(os.getenv("RADIO_SCHEDULER_INTERVAL_SECONDS", "30"))
+    file_retention_seconds: int = int(os.getenv("RADIO_FILE_RETENTION_SECONDS", "1800"))
     yt_dlp_enabled: bool = os.getenv("RADIO_YT_DLP_ENABLED", "1").lower() in ("1", "true", "yes")
     session_cookie_secure: bool = os.getenv("RADIO_SESSION_COOKIE_SECURE", "0").lower() in ("1", "true", "yes")
 
