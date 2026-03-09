@@ -1,0 +1,549 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>방송부 투표 현황</title>
+  <style>
+    @import url("https://cdn.jsdelivr.net/npm/pretendard@1.3.9/dist/web/static/pretendard.css");
+
+    :root {
+      --primary: #329f5b;
+      --secondary: #8fd5a6;
+      --bg: #f3faf5;
+      --surface: #ffffff;
+      --surface-soft: #f8fcf9;
+      --line: #d6e9dc;
+      --text: #173225;
+      --muted: #5d7b6a;
+      --shadow: 0 10px 28px rgba(27, 61, 40, 0.08);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: linear-gradient(180deg, #f7fcf8 0%, var(--bg) 100%);
+      color: var(--text);
+      font-family: "Pretendard", sans-serif;
+    }
+
+    .wrap {
+      width: min(1060px, calc(100vw - 28px));
+      margin: 22px auto 34px;
+      display: grid;
+      gap: 12px;
+    }
+
+    .brand {
+      font-family: "Pretendard", sans-serif;
+      font-size: 24px;
+      letter-spacing: -0.02em;
+      font-weight: 800;
+    }
+
+    .nav {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .nav a {
+      text-decoration: none;
+      color: var(--primary);
+      border: 1px solid #c7e3d2;
+      background: #fff;
+      padding: 8px 11px;
+      border-radius: 10px;
+      font-size: 13px;
+      font-weight: 700;
+      transition: all .16s ease;
+    }
+
+    .nav a:hover {
+      color: #fff;
+      border-color: var(--primary);
+      background: var(--primary);
+      transform: translateY(-1px);
+    }
+
+    .muted { color: var(--muted); }
+
+    .header-note {
+      height: 20px;
+      display: flex;
+      align-items: center;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: var(--surface);
+      box-shadow: var(--shadow);
+      padding: 14px;
+    }
+
+    .header-panel {
+      display: grid;
+      gap: 10px;
+      min-height: 122px;
+    }
+
+    .header-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .header-left {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+
+    .head h2 {
+      margin: 0;
+      font-family: "Pretendard", sans-serif;
+      font-size: 21px;
+      letter-spacing: -0.01em;
+      font-weight: 700;
+    }
+
+    .auth-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .mini {
+      padding: 7px 10px;
+      font-size: 13px;
+    }
+
+    .btn {
+      font: inherit;
+      border-radius: 10px;
+      border: 1px solid var(--primary);
+      background: var(--primary);
+      color: #fff;
+      font-weight: 700;
+      padding: 8px 12px;
+      cursor: pointer;
+      transition: all .16s ease;
+    }
+
+    .btn.light {
+      border-color: #c7e3d2;
+      background: #fff;
+      color: var(--primary);
+    }
+
+    button {
+      font: inherit;
+      border-radius: 10px;
+      border: 1px solid var(--primary);
+      background: var(--primary);
+      color: #fff;
+      font-weight: 700;
+      padding: 8px 12px;
+      cursor: pointer;
+      transition: all .16s ease;
+    }
+
+    button:hover { filter: brightness(1.06); transform: translateY(-1px); }
+
+    .toast {
+      position: fixed;
+      right: 14px;
+      bottom: 14px;
+      border: 1px solid #c9dfd2;
+      border-left: 4px solid var(--primary);
+      background: #fff;
+      color: #1f3a2b;
+      border-radius: 10px;
+      padding: 9px 12px;
+      box-shadow: var(--shadow);
+      font-size: 13px;
+      transform: translateY(12px);
+      opacity: 0;
+      transition: all .2s ease;
+    }
+
+    .toast.show { transform: translateY(0); opacity: 1; }
+
+    .state {
+      border: 1px solid #d7e9dd;
+      border-radius: 10px;
+      background: var(--surface-soft);
+      padding: 10px;
+      margin-top: 10px;
+      color: #426453;
+      font-size: 13px;
+    }
+
+    .summary {
+      border: 1px solid #d7e9dd;
+      border-radius: 10px;
+      background: var(--surface-soft);
+      padding: 9px 11px;
+      color: #426453;
+      font-size: 13px;
+      margin-bottom: 10px;
+    }
+
+    .list {
+      display: grid;
+      gap: 8px;
+      max-height: 520px;
+      overflow: auto;
+      padding-right: 2px;
+    }
+
+    .item {
+      display: grid;
+      grid-template-columns: 26px 56px 1fr auto;
+      align-items: center;
+      gap: 10px;
+      border: 1px solid var(--line);
+      border-radius: 11px;
+      background: var(--surface-soft);
+      padding: 8px;
+    }
+
+    .rank {
+      font-weight: 700;
+      color: var(--primary);
+      text-align: center;
+    }
+
+    .item img {
+      width: 56px;
+      height: 56px;
+      border-radius: 8px;
+      object-fit: cover;
+      border: 1px solid #d2e6da;
+      background: #fff;
+    }
+
+    .title { font-weight: 700; }
+    .meta { color: var(--muted); font-size: 12px; }
+
+    .votes {
+      min-width: 56px;
+      text-align: center;
+      color: var(--primary);
+      border: 1px solid #c4e1cf;
+      border-radius: 999px;
+      background: #fff;
+      font-weight: 700;
+      padding: 6px 8px;
+    }
+
+    .empty {
+      border: 1px dashed #c9dfd2;
+      border-radius: 10px;
+      background: var(--surface-soft);
+      color: var(--muted);
+      padding: 16px;
+      text-align: center;
+      font-size: 14px;
+    }
+
+    .login-modal {
+      position: fixed;
+      inset: 0;
+      background: rgba(12, 26, 18, 0.44);
+      display: none;
+      place-items: center;
+      z-index: 100;
+      padding: 12px;
+    }
+
+    .login-modal.show { display: grid; }
+
+    .login-card {
+      width: min(400px, calc(100vw - 24px));
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: var(--surface);
+      box-shadow: var(--shadow);
+      padding: 14px;
+      display: grid;
+      gap: 8px;
+    }
+
+    .login-card h3 {
+      margin: 0 0 4px;
+      font-family: "Pretendard", sans-serif;
+      letter-spacing: -0.02em;
+      font-size: 22px;
+    }
+
+    .login-field {
+      width: 100%;
+      border: 1px solid #c9dfd2;
+      border-radius: 9px;
+      padding: 9px 10px;
+      font: inherit;
+      color: var(--text);
+      background: #fff;
+      outline: none;
+    }
+
+    .login-field:focus { border-color: var(--primary); }
+
+    @media (max-width: 760px) {
+      .header-row { flex-direction: column; align-items: flex-start; }
+      .header-left { width: 100%; }
+      .item { grid-template-columns: 24px 50px 1fr auto; }
+      .item img { width: 50px; height: 50px; }
+      .header-row .auth-actions { width: 100%; }
+      .auth-actions .btn { flex: 1; }
+    }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <section class="panel header-panel">
+      <div class="header-row" aria-label="상단 이동">
+        <div class="header-left">
+          <div class="brand">현재 투표 목록</div>
+          <nav class="nav">
+            <a href="/submit">신청</a>
+            <a href="/vote">투표</a>
+            <a id="adminNavLink" href="/admin" style="display:none;">관리</a>
+          </nav>
+        </div>
+        <div class="auth-actions">
+          <button id="loginBtn" type="button" class="btn mini" onclick="openLoginModal()">로그인</button>
+          <button id="logoutBtn" type="button" class="btn light mini" onclick="logout()" style="display:none;">로그아웃</button>
+        </div>
+      </div>
+      <div class="muted header-note">메인은 조회 전용이며 신청·투표는 각 페이지에서 진행합니다.</div>
+    </section>
+
+    <section class="panel" aria-labelledby="rank-title">
+      <div class="head">
+        <h2 id="rank-title">이번 달 실시간 순위</h2>
+        <button type="button" onclick="loadSongs()">새로고침</button>
+      </div>
+      <div id="summary" class="summary">불러오는 중...</div>
+      <div id="songs" class="list" aria-live="polite"></div>
+    </section>
+  </main>
+
+  <section id="loginModal" class="login-modal" aria-hidden="true">
+    <div class="login-card" role="dialog" aria-modal="true" aria-labelledby="loginTitle">
+      <h3 id="loginTitle">리로스쿨 로그인</h3>
+      <input id="riroId" class="login-field" placeholder="리로스쿨 ID" aria-label="리로스쿨 아이디" />
+      <input id="riroPw" class="login-field" type="password" placeholder="리로스쿨 PW" aria-label="리로스쿨 비밀번호" />
+      <div class="auth-actions">
+        <button type="button" class="btn" onclick="login()">로그인</button>
+        <button type="button" class="btn light" onclick="closeLoginModal()">닫기</button>
+      </div>
+    </div>
+  </section>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    const ERROR_MESSAGES = {
+      "auth-required": "로그인이 필요합니다.",
+      "admin-required": "관리자 권한이 필요합니다.",
+      "riro_id-and-riro_pw-required": "리로 ID/PW를 입력하세요.",
+      "riro-auth-failed": "리로 로그인에 실패했습니다. ID/PW를 확인하세요.",
+      "rate-limit": "요청이 너무 많습니다. 잠시 후 다시 시도하세요.",
+      "round-not-open": "현재 월 투표가 열려 있지 않습니다.",
+      "song-search-unavailable": "곡 검색 서버에 연결할 수 없습니다. 잠시 후 다시 시도하세요.",
+      "request-failed": "요청 처리 중 오류가 발생했습니다."
+    };
+    let lastFocusedElement = null;
+
+    function getErrorMessage(data) {
+      if (data && typeof data.message === "string" && data.message.trim()) return data.message;
+      const code = data && typeof data.error === "string" ? data.error : "";
+      return ERROR_MESSAGES[code] || (code ? `오류: ${code}` : "요청 처리 중 오류가 발생했습니다.");
+    }
+
+    async function api(path, method = "GET", body = null) {
+      const res = await fetch(path, {
+        method,
+        headers: body ? { "Content-Type": "application/json" } : {},
+        body: body ? JSON.stringify(body) : undefined
+      });
+      let data = {};
+      try {
+        data = await res.json();
+      } catch (_) {
+        data = {};
+      }
+      if (!res.ok) throw new Error(getErrorMessage(data));
+      return data;
+    }
+
+    function toast(message, isError = false) {
+      const box = document.getElementById("toast");
+      box.textContent = message;
+      box.style.borderLeftColor = isError ? "#a34848" : "#329f5b";
+      box.classList.add("show");
+      setTimeout(() => box.classList.remove("show"), 2000);
+    }
+
+    function monthLabelFromRound(round) {
+      const start = round && round.start_at ? new Date(round.start_at) : new Date();
+      if (Number.isNaN(start.getTime())) return `${new Date().getMonth() + 1}월`;
+      return `${start.getMonth() + 1}월`;
+    }
+
+    function setAuthButtons(isLoggedIn, isAdmin = false) {
+      document.getElementById("loginBtn").style.display = isLoggedIn ? "none" : "";
+      document.getElementById("logoutBtn").style.display = isLoggedIn ? "" : "none";
+      document.getElementById("adminNavLink").style.display = isLoggedIn && isAdmin ? "" : "none";
+    }
+
+    function openLoginModal() {
+      const modal = document.getElementById("loginModal");
+      lastFocusedElement = document.activeElement;
+      modal.classList.add("show");
+      modal.setAttribute("aria-hidden", "false");
+      setTimeout(() => document.getElementById("riroId").focus(), 0);
+    }
+
+    function closeLoginModal() {
+      const modal = document.getElementById("loginModal");
+      modal.classList.remove("show");
+      modal.setAttribute("aria-hidden", "true");
+      if (lastFocusedElement && typeof lastFocusedElement.focus === "function") {
+        lastFocusedElement.focus();
+      }
+    }
+
+    function modalFocusableElements() {
+      return [...document.querySelectorAll("#loginModal .login-field, #loginModal button")]
+        .filter((el) => !el.disabled && el.offsetParent !== null);
+    }
+
+    function handleModalKeydown(event) {
+      const modal = document.getElementById("loginModal");
+      if (!modal.classList.contains("show")) return;
+
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeLoginModal();
+        return;
+      }
+
+      if (event.key !== "Tab") return;
+      const elements = modalFocusableElements();
+      if (elements.length === 0) return;
+      const first = elements[0];
+      const last = elements[elements.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    async function refreshMe() {
+      try {
+        const data = await api("/api/me");
+        if (!data.user) {
+          setAuthButtons(false, false);
+          return;
+        }
+        setAuthButtons(true, Boolean(data.user.is_admin_approved));
+      } catch (err) {
+        setAuthButtons(false, false);
+      }
+    }
+
+    async function login() {
+      const riro_id = document.getElementById("riroId").value.trim();
+      const riro_pw = document.getElementById("riroPw").value.trim();
+      if (!riro_id || !riro_pw) return toast("리로 ID/PW를 입력하세요.", true);
+      try {
+        await api("/api/auth/login", "POST", { riro_id, riro_pw });
+        await refreshMe();
+        closeLoginModal();
+        toast("로그인되었습니다.");
+      } catch (err) {
+        toast(`로그인 실패: ${err.message}`, true);
+      }
+    }
+
+    async function logout() {
+      try {
+        await api("/api/auth/logout", "POST", {});
+        await refreshMe();
+        toast("로그아웃되었습니다.");
+      } catch (err) {
+        toast(`로그아웃 실패: ${err.message}`, true);
+      }
+    }
+
+    async function loadSongs() {
+      const summary = document.getElementById("summary");
+      const root = document.getElementById("songs");
+      const rankTitle = document.getElementById("rank-title");
+      try {
+        const data = await api("/api/public/songs");
+        const items = data.items || [];
+        const monthLabel = monthLabelFromRound(data.round);
+        rankTitle.textContent = `${monthLabel} 실시간 순위`;
+        summary.textContent = `${monthLabel} · 총 ${items.length}곡`;
+
+        if (items.length === 0) {
+          root.innerHTML = `<div class="empty">아직 등록된 곡이 없습니다.</div>`;
+          return;
+        }
+
+        root.innerHTML = "";
+        items.forEach((item, idx) => {
+          const el = document.createElement("div");
+          el.className = "item";
+          el.innerHTML = `
+            <div class="rank">${idx + 1}</div>
+            <img src="${item.album_art_url || "https://placehold.co/80x80?text=No+Art"}" alt="${item.title} 앨범아트" />
+            <div>
+              <div class="title">${item.title}</div>
+              <div class="meta">${item.artist}</div>
+            </div>
+            <div class="votes">${item.vote_count}표</div>
+          `;
+          root.appendChild(el);
+        });
+      } catch (err) {
+        summary.textContent = `오류: ${err.message}`;
+        root.innerHTML = `<div class="empty">목록을 불러오지 못했습니다.</div>`;
+      }
+    }
+
+    document.getElementById("loginModal").addEventListener("click", (event) => {
+      if (event.target.id === "loginModal") closeLoginModal();
+    });
+
+    document.addEventListener("keydown", handleModalKeydown);
+
+    refreshMe();
+    loadSongs();
+  </script>
+</body>
+</html>

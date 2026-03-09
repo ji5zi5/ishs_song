@@ -1,0 +1,898 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>관리자 콘솔</title>
+  <style>
+    @import url("https://cdn.jsdelivr.net/npm/pretendard@1.3.9/dist/web/static/pretendard.css");
+
+    :root {
+      --primary: #329f5b;
+      --secondary: #8fd5a6;
+      --bg: #f3faf5;
+      --surface: #ffffff;
+      --surface-soft: #f7fcf8;
+      --line: #d0e7d9;
+      --text: #163124;
+      --muted: #5f7f6d;
+      --shadow: 0 12px 30px rgba(21, 56, 35, 0.1);
+      --danger: #b14c4c;
+      --warning: #8d6b19;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: linear-gradient(180deg, #f9fdf9 0%, var(--bg) 100%);
+      color: var(--text);
+      font-family: "Pretendard", sans-serif;
+    }
+
+    .wrap {
+      width: min(1180px, calc(100vw - 28px));
+      margin: 22px auto 36px;
+      display: grid;
+      gap: 12px;
+    }
+
+    .topbar,
+    .hero,
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: var(--surface);
+      box-shadow: var(--shadow);
+    }
+
+    .topbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      padding: 12px 14px;
+    }
+
+    .brand {
+      font-size: 25px;
+      font-weight: 800;
+      letter-spacing: -0.03em;
+    }
+
+    .nav {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .nav a,
+    .mini-btn,
+    .chip-btn {
+      text-decoration: none;
+      color: var(--primary);
+      border: 1px solid #c4e0cf;
+      background: #fff;
+      padding: 8px 11px;
+      border-radius: 10px;
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: all .15s ease;
+    }
+
+    .nav a:hover,
+    .mini-btn:hover,
+    .chip-btn:hover {
+      color: #fff;
+      border-color: var(--primary);
+      background: var(--primary);
+      transform: translateY(-1px);
+    }
+
+    .hero {
+      padding: 18px;
+      background: linear-gradient(140deg, #ffffff 0%, #ecf8f0 100%);
+      display: grid;
+      gap: 14px;
+    }
+
+    h1,
+    h2,
+    h3 {
+      margin: 0;
+      letter-spacing: -0.02em;
+    }
+
+    h1 { font-size: 31px; }
+    h2 { font-size: 20px; }
+    h3 { font-size: 15px; }
+
+    .muted { color: var(--muted); }
+
+    .summary-grid,
+    .grid {
+      display: grid;
+      gap: 12px;
+    }
+
+    .summary-grid {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+
+    .summary-card {
+      border: 1px solid #d9ecdf;
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.82);
+      padding: 14px;
+      display: grid;
+      gap: 6px;
+    }
+
+    .summary-label {
+      font-size: 12px;
+      font-weight: 700;
+      color: #517564;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    .summary-value {
+      font-size: 28px;
+      font-weight: 800;
+      letter-spacing: -0.03em;
+    }
+
+    .grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .panel {
+      padding: 16px;
+      display: grid;
+      gap: 12px;
+      min-height: 100%;
+    }
+
+    .full { grid-column: 1 / -1; }
+
+    .panel-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .panel-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .field-grid,
+    .inline {
+      display: grid;
+      gap: 10px;
+    }
+
+    .inline {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    label {
+      display: block;
+      margin-bottom: 5px;
+      font-size: 13px;
+      color: #3d664f;
+      font-weight: 700;
+    }
+
+    input,
+    select,
+    button,
+    textarea {
+      width: 100%;
+      font: inherit;
+      border-radius: 10px;
+      border: 1px solid #c8e2d2;
+    }
+
+    input,
+    select,
+    textarea {
+      background: #fff;
+      color: var(--text);
+      padding: 10px;
+      outline: none;
+    }
+
+    input:focus,
+    select:focus,
+    textarea:focus {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px rgba(50, 159, 91, 0.14);
+    }
+
+    button {
+      background: var(--primary);
+      color: #fff;
+      border-color: var(--primary);
+      font-weight: 700;
+      padding: 10px 12px;
+      cursor: pointer;
+      transition: all .15s ease;
+    }
+
+    button:hover { filter: brightness(1.05); transform: translateY(-1px); }
+
+    button.secondary {
+      background: #fff;
+      color: var(--primary);
+      border-color: #c4e0cf;
+    }
+
+    button.warn {
+      background: #fff8ee;
+      color: var(--warning);
+      border-color: #ead39c;
+    }
+
+    button.danger {
+      background: #fff6f6;
+      color: var(--danger);
+      border-color: #ddb8b8;
+    }
+
+    button:disabled {
+      opacity: .55;
+      cursor: default;
+      transform: none;
+      filter: none;
+    }
+
+    .checkbox {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      color: #375f49;
+      font-size: 14px;
+    }
+
+    .checkbox input {
+      width: auto;
+      margin: 0;
+      accent-color: var(--primary);
+    }
+
+    .status-box,
+    .note,
+    .empty,
+    .list-card {
+      border: 1px solid #d4e8dc;
+      border-radius: 12px;
+      background: var(--surface-soft);
+    }
+
+    .status-box,
+    .note,
+    .empty {
+      padding: 12px;
+      font-size: 14px;
+      line-height: 1.6;
+    }
+
+    .status-box.error {
+      border-color: #e4baba;
+      background: #fff6f6;
+      color: #8a3030;
+    }
+
+    .status-box.success {
+      border-color: #cfe7d6;
+      background: #f6fbf7;
+      color: #2c5b40;
+    }
+
+    .pill-row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      padding: 4px 9px;
+      font-size: 11px;
+      font-weight: 800;
+      border: 1px solid #cae4d3;
+      background: #fff;
+      color: #2b6a42;
+      letter-spacing: 0.02em;
+    }
+
+    .badge.warn {
+      color: var(--warning);
+      border-color: #ead39c;
+      background: #fff9ef;
+    }
+
+    .badge.danger {
+      color: var(--danger);
+      border-color: #e3c1c1;
+      background: #fff6f6;
+    }
+
+    .list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .list-card {
+      padding: 12px;
+      display: grid;
+      gap: 10px;
+    }
+
+    .row {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .meta {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      color: #557262;
+      font-size: 13px;
+    }
+
+    .title-line {
+      display: grid;
+      gap: 4px;
+    }
+
+    .title-line strong {
+      font-size: 15px;
+    }
+
+    .kv {
+      display: grid;
+      grid-template-columns: 110px 1fr;
+      gap: 4px 8px;
+      font-size: 13px;
+    }
+
+    .k {
+      color: #577664;
+      font-weight: 700;
+    }
+
+    .v {
+      color: #1f3f2f;
+      word-break: break-word;
+    }
+
+    @media (max-width: 980px) {
+      .summary-grid,
+      .grid,
+      .inline {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <section class="topbar" aria-label="관리자 상단 바">
+      <div class="brand">관리자</div>
+      <div class="nav">
+        <a href="/">메인</a>
+        <a href="/submit">신청</a>
+        <a href="/vote">투표</a>
+        <button type="button" class="mini-btn" onclick="refreshAll()">새로고침</button>
+        <button type="button" class="mini-btn" onclick="logout()">로그아웃</button>
+      </div>
+    </section>
+
+    <section class="hero">
+      <div>
+        <h1>방송부 운영 콘솔</h1>
+        <p class="muted">승인, 신청곡 관리, 월 설정, 마감, 아티팩트 다운로드, 로그 확인을 한 화면에서 처리합니다.</p>
+      </div>
+      <section class="summary-grid" aria-label="운영 요약">
+        <article class="summary-card">
+          <div class="summary-label">승인된 관리자</div>
+          <div class="summary-value" id="summaryAdmins">-</div>
+          <div class="muted">현재 관리자 권한 보유 계정 수</div>
+        </article>
+        <article class="summary-card">
+          <div class="summary-label">이번 달 신청</div>
+          <div class="summary-value" id="summarySubmissions">-</div>
+          <div class="muted">현재 진행 중인 신청곡 수</div>
+        </article>
+        <article class="summary-card">
+          <div class="summary-label">숨김 기능</div>
+          <div class="summary-value" id="summaryHidden">OFF</div>
+          <div class="muted">곡 숨김 처리는 사용하지 않음</div>
+        </article>
+        <article class="summary-card">
+          <div class="summary-label">최근 아티팩트</div>
+          <div class="summary-value" id="summaryArtifact">-</div>
+          <div class="muted">가장 최근 생성된 결과 시각</div>
+        </article>
+      </section>
+    </section>
+
+    <section class="grid">
+      <article class="panel" aria-labelledby="settings-title">
+        <div class="panel-head">
+          <div>
+            <h2 id="settings-title">기본 설정</h2>
+            <p class="muted">새로 열리는 월의 기본 규칙을 관리합니다.</p>
+          </div>
+          <div class="panel-actions">
+            <button type="button" class="secondary chip-btn" onclick="loadSettings()">불러오기</button>
+          </div>
+        </div>
+
+        <div class="field-grid">
+          <div>
+            <label for="cadence">주기</label>
+            <select id="cadence" aria-label="주기 선택">
+              <option value="monthly">monthly</option>
+              <option value="weekly">weekly</option>
+            </select>
+          </div>
+          <div class="inline">
+            <div>
+              <label for="playlistSize">기본 곡 수</label>
+              <input id="playlistSize" type="number" min="1" max="100" />
+            </div>
+            <div>
+              <label for="targetSeconds">목표 초</label>
+              <input id="targetSeconds" type="number" min="60" max="10800" />
+            </div>
+          </div>
+          <label class="checkbox">
+            <input id="loudnorm" type="checkbox" />
+            볼륨 보정 기본 활성화
+          </label>
+        </div>
+
+        <div class="panel-actions">
+          <button type="button" onclick="saveSettings()">설정 저장</button>
+        </div>
+        <div class="status-box" id="settingsStatus" aria-live="polite">저장된 기본값을 불러오는 중입니다.</div>
+      </article>
+
+      <article class="panel" aria-labelledby="close-title">
+        <div class="panel-head">
+          <div>
+            <h2 id="close-title">수동 마감</h2>
+            <p class="muted">현재 open 상태의 월을 즉시 마감하고 결과 아티팩트를 생성합니다.</p>
+          </div>
+        </div>
+        <div class="note">
+          마감 후 최신 아티팩트와 운영 로그를 자동으로 새로고침합니다. 예상치 못한 실패는 브라우저에 내부 오류를 노출하지 않고 로그로 남깁니다.
+        </div>
+        <div class="panel-actions">
+          <button type="button" class="warn" onclick="manualClose()">현재 월 마감 실행</button>
+        </div>
+        <div class="status-box" id="closeStatus" aria-live="polite">아직 실행하지 않았습니다.</div>
+      </article>
+
+      <article class="panel full" aria-labelledby="users-title">
+        <div class="panel-head">
+          <div>
+            <h2 id="users-title">관리자 승인</h2>
+            <p class="muted">로그인한 계정 목록에서 관리자 권한을 부여하거나 회수합니다.</p>
+          </div>
+          <div class="panel-actions">
+            <button type="button" class="secondary chip-btn" onclick="loadUsers()">목록 새로고침</button>
+          </div>
+        </div>
+        <div class="status-box" id="usersStatus" aria-live="polite">계정 목록을 불러오는 중입니다.</div>
+        <div class="list" id="usersList"></div>
+      </article>
+
+      <article class="panel full" aria-labelledby="submissions-title">
+        <div class="panel-head">
+          <div>
+            <h2 id="submissions-title">현재 신청곡 관리</h2>
+            <p class="muted">현재 월 신청곡과 투표 수를 읽기 전용으로 확인합니다.</p>
+          </div>
+          <div class="panel-actions">
+            <button type="button" class="secondary chip-btn" onclick="loadSubmissions()">목록 새로고침</button>
+          </div>
+        </div>
+        <div class="status-box" id="submissionsStatus" aria-live="polite">신청곡 목록을 불러오는 중입니다.</div>
+        <div class="list" id="submissionsList"></div>
+      </article>
+
+      <article class="panel" aria-labelledby="artifact-title">
+        <div class="panel-head">
+          <div>
+            <h2 id="artifact-title">최근 아티팩트</h2>
+            <p class="muted">가장 최근 생성된 재생목록과 합본 음원을 바로 내려받습니다.</p>
+          </div>
+          <div class="panel-actions">
+            <button type="button" class="secondary chip-btn" onclick="loadArtifact()">불러오기</button>
+          </div>
+        </div>
+        <div class="status-box" id="artifactStatus" aria-live="polite">아티팩트를 불러오는 중입니다.</div>
+      </article>
+
+      <article class="panel" aria-labelledby="audit-title">
+        <div class="panel-head">
+          <div>
+            <h2 id="audit-title">최근 운영 로그</h2>
+            <p class="muted">최근 승인, 숨김, 설정 저장, 마감 기록을 확인합니다.</p>
+          </div>
+          <div class="panel-actions">
+            <button type="button" class="secondary chip-btn" onclick="loadAuditLogs()">새로고침</button>
+          </div>
+        </div>
+        <div class="status-box" id="auditStatus" aria-live="polite">운영 로그를 불러오는 중입니다.</div>
+        <div class="list" id="auditList"></div>
+      </article>
+
+      <article class="panel full" aria-labelledby="ops-title">
+        <div class="panel-head">
+          <div>
+            <h2 id="ops-title">운영 메모</h2>
+            <p class="muted">잠금 복구와 초기 관리자 부여는 UI가 아니라 운영 절차로 유지합니다.</p>
+          </div>
+        </div>
+        <div class="note">
+          1) 첫 관리자 부여와 관리자 전원 잠금 복구는 README의 break-glass 절차로만 처리합니다.<br />
+          2) 신청곡 목록은 현재 읽기 전용이며, 곡 숨김 처리는 비활성화되어 있습니다.<br />
+          3) 아티팩트는 관리자 인증된 다운로드만 허용되며 서버 내부 경로는 화면에 노출하지 않습니다.
+        </div>
+      </article>
+    </section>
+  </main>
+
+  <script>
+    let cachedUsers = [];
+    let cachedSubmissions = [];
+    let cachedArtifact = null;
+
+    async function api(path, method = "GET", body = null) {
+      const res = await fetch(path, {
+        method,
+        headers: body ? { "Content-Type": "application/json" } : {},
+        body: body ? JSON.stringify(body) : undefined
+      });
+      const contentType = res.headers.get("content-type") || "";
+      const data = contentType.includes("application/json") ? await res.json() : null;
+      if (!res.ok) {
+        const message = data?.message || data?.error || "request-failed";
+        const error = new Error(message);
+        error.payload = data;
+        throw error;
+      }
+      return data;
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#39;");
+    }
+
+    function formatDateTime(value) {
+      if (!value) return "-";
+      const d = new Date(value);
+      if (Number.isNaN(d.getTime())) return value;
+      return d.toLocaleString("ko-KR");
+    }
+
+    function monthLabelFromIso(value) {
+      if (!value) return "-";
+      const d = new Date(value);
+      if (Number.isNaN(d.getTime())) return "-";
+      return `${d.getMonth() + 1}월`;
+    }
+
+    function setStatus(id, message, variant = "") {
+      const el = document.getElementById(id);
+      el.className = `status-box${variant ? ` ${variant}` : ""}`;
+      el.innerHTML = message;
+    }
+
+    function setListHtml(id, html) {
+      document.getElementById(id).innerHTML = html;
+    }
+
+    function setSummaryCounts() {
+      const adminCount = cachedUsers.filter((user) => user.is_admin_approved).length;
+      document.getElementById("summaryAdmins").textContent = adminCount || "0";
+      document.getElementById("summarySubmissions").textContent = cachedSubmissions.length || "0";
+      document.getElementById("summaryHidden").textContent = "OFF";
+      document.getElementById("summaryArtifact").textContent = cachedArtifact?.created_at ? formatDateTime(cachedArtifact.created_at) : "없음";
+    }
+
+    function renderSettings(data, sourceLabel = "현재 저장값") {
+      const defaults = data.defaults || {};
+      document.getElementById("cadence").value = defaults.cadence || "monthly";
+      document.getElementById("playlistSize").value = defaults.playlist_size ?? 12;
+      document.getElementById("targetSeconds").value = defaults.target_seconds ?? 2400;
+      document.getElementById("loudnorm").checked = Boolean(defaults.loudnorm_enabled);
+      setStatus(
+        "settingsStatus",
+        `<strong>${escapeHtml(sourceLabel)}</strong><br />주기 ${escapeHtml(defaults.cadence)} / 기본 ${escapeHtml(defaults.playlist_size)}곡 / 목표 ${escapeHtml(defaults.target_seconds)}초`,
+        "success"
+      );
+    }
+
+    function renderUsers(users) {
+      cachedUsers = users;
+      setSummaryCounts();
+      if (!users.length) {
+        setListHtml("usersList", '<div class="empty">로그인 기록이 있는 계정이 아직 없습니다.</div>');
+        return;
+      }
+      setListHtml(
+        "usersList",
+        users.map((user) => `
+          <article class="list-card">
+            <div class="row">
+              <div class="title-line">
+                <strong>${escapeHtml(user.display_name)}</strong>
+                <div class="meta">
+                  <span>${escapeHtml(user.riro_user_key)}</span>
+                  <span>생성 ${escapeHtml(formatDateTime(user.created_at))}</span>
+                </div>
+              </div>
+              <div class="pill-row">
+                <span class="badge${user.is_admin_approved ? "" : " warn"}">${user.is_admin_approved ? "관리자" : "일반 계정"}</span>
+                <button type="button" class="chip-btn ${user.is_admin_approved ? "danger" : "secondary"}" onclick="toggleAdmin(${user.id}, ${user.is_admin_approved ? "false" : "true"})">${user.is_admin_approved ? "권한 회수" : "관리자 승인"}</button>
+              </div>
+            </div>
+          </article>
+        `).join("")
+      );
+    }
+
+    function renderSubmissions(items) {
+      cachedSubmissions = items;
+      setSummaryCounts();
+      if (!items.length) {
+        setListHtml("submissionsList", '<div class="empty">현재 월에 신청된 곡이 없습니다.</div>');
+        return;
+      }
+      setListHtml(
+        "submissionsList",
+        items.map((item) => `
+          <article class="list-card">
+            <div class="row">
+              <div class="title-line">
+                <strong>${escapeHtml(item.title)} <span class="muted">- ${escapeHtml(item.artist)}</span></strong>
+                <div class="meta">
+                  <span>신청자 ${escapeHtml(item.display_name)}</span>
+                  <span>투표 ${escapeHtml(item.vote_count)}표</span>
+                  <span>${escapeHtml(formatDateTime(item.submitted_at))}</span>
+                </div>
+              </div>
+              <div class="pill-row">
+                <span class="badge${item.is_hidden ? " danger" : ""}">${item.is_hidden ? "숨김" : "노출 중"}</span>
+              </div>
+            </div>
+          </article>
+        `).join("")
+      );
+    }
+
+    function renderArtifact(artifact) {
+      cachedArtifact = artifact;
+      setSummaryCounts();
+      if (!artifact) {
+        setStatus("artifactStatus", "최근 생성된 아티팩트가 없습니다.");
+        return;
+      }
+      const buttons = [];
+      if (artifact.has_m3u) {
+        buttons.push(`<button type="button" class="secondary" onclick="downloadArtifact(${artifact.id}, 'm3u')">M3U 다운로드</button>`);
+      }
+      if (artifact.has_mp3) {
+        buttons.push(`<button type="button" onclick="downloadArtifact(${artifact.id}, 'mp3')">MP3 다운로드</button>`);
+      }
+      setStatus(
+        "artifactStatus",
+        `
+          <div class="kv">
+            <div class="k">대상 월</div><div class="v">${escapeHtml(monthLabelFromIso(artifact.start_at))}</div>
+            <div class="k">주기</div><div class="v">${escapeHtml(artifact.cadence)}</div>
+            <div class="k">총 길이</div><div class="v">${escapeHtml(artifact.total_seconds)}초</div>
+            <div class="k">생성 시각</div><div class="v">${escapeHtml(formatDateTime(artifact.created_at))}</div>
+            <div class="k">요약</div><div class="v">${escapeHtml(artifact.generation_summary || "생성 완료")}</div>
+          </div>
+          <div class="panel-actions" style="margin-top:10px;">${buttons.join("") || '<span class="muted">내려받을 파일이 없습니다.</span>'}</div>
+        `,
+        "success"
+      );
+    }
+
+    function renderAuditLogs(items) {
+      if (!items.length) {
+        setListHtml("auditList", '<div class="empty">아직 기록된 운영 로그가 없습니다.</div>');
+        return;
+      }
+      setListHtml(
+        "auditList",
+        items.map((item) => `
+          <article class="list-card">
+            <div class="row">
+              <div class="title-line">
+                <strong>${escapeHtml(item.action)}</strong>
+                <div class="meta">
+                  <span>${escapeHtml(formatDateTime(item.created_at))}</span>
+                  <span>actor ${escapeHtml(item.actor_user_id ?? "-")}</span>
+                  <span>round ${escapeHtml(item.round_id ?? "-")}</span>
+                </div>
+              </div>
+              <span class="badge">#${escapeHtml(item.id)}</span>
+            </div>
+            <div class="note">${escapeHtml(item.detail || "-")}</div>
+          </article>
+        `).join("")
+      );
+    }
+
+    function renderError(statusId, message) {
+      setStatus(statusId, escapeHtml(message), "error");
+    }
+
+    async function requireAdmin() {
+      const data = await api("/api/me");
+      if (!data.user || !data.user.is_admin_approved) {
+        window.location.href = "/";
+        throw new Error("admin-required");
+      }
+    }
+
+    async function logout() {
+      try {
+        await api("/api/auth/logout", "POST", {});
+      } finally {
+        window.location.href = "/";
+      }
+    }
+
+    async function loadSettings() {
+      try {
+        const data = await api("/api/admin/settings/current");
+        renderSettings(data);
+      } catch (err) {
+        renderError("settingsStatus", err.message);
+      }
+    }
+
+    async function saveSettings() {
+      try {
+        const payload = {
+          cadence: document.getElementById("cadence").value,
+          playlist_size: Number(document.getElementById("playlistSize").value),
+          target_seconds: Number(document.getElementById("targetSeconds").value),
+          loudnorm_enabled: document.getElementById("loudnorm").checked
+        };
+        const data = await api("/api/admin/settings", "POST", payload);
+        renderSettings(data, "저장 완료");
+        await loadAuditLogs();
+      } catch (err) {
+        renderError("settingsStatus", err.message);
+      }
+    }
+
+    async function manualClose() {
+      try {
+        const data = await api("/api/admin/rounds/close", "POST", {});
+        const status = escapeHtml(data.status || "unknown");
+        const selected = escapeHtml(data.selected_count ?? "-");
+        const totalSeconds = escapeHtml(data.total_seconds ?? "-");
+        setStatus(
+          "closeStatus",
+          `<strong>${status}</strong><br />선정 ${selected}곡 / 총 ${totalSeconds}초`,
+          "success"
+        );
+        if (data.artifact) {
+          renderArtifact(data.artifact);
+        } else {
+          await loadArtifact();
+        }
+        await loadAuditLogs();
+      } catch (err) {
+        renderError("closeStatus", err.message);
+      }
+    }
+
+    async function loadUsers() {
+      try {
+        const data = await api("/api/admin/users");
+        renderUsers(data.users || []);
+        setStatus("usersStatus", `총 ${escapeHtml((data.users || []).length)}개 계정을 표시 중입니다.`, "success");
+      } catch (err) {
+        renderError("usersStatus", err.message);
+      }
+    }
+
+    async function toggleAdmin(userId, approved) {
+      try {
+        await api("/api/admin/users/approve", "POST", { user_id: userId, approved });
+        setStatus("usersStatus", approved ? "관리자 승인이 반영되었습니다." : "관리자 권한 회수가 반영되었습니다.", "success");
+        await Promise.all([loadUsers(), loadAuditLogs()]);
+      } catch (err) {
+        renderError("usersStatus", err.message);
+      }
+    }
+
+    async function loadSubmissions() {
+      try {
+        const data = await api("/api/admin/submissions/current");
+        renderSubmissions(data.items || []);
+        setStatus("submissionsStatus", `현재 ${escapeHtml((data.items || []).length)}개의 신청곡을 읽기 전용으로 표시 중입니다.`, "success");
+      } catch (err) {
+        renderError("submissionsStatus", err.message);
+      }
+    }
+
+    async function loadArtifact() {
+      try {
+        const data = await api("/api/admin/artifacts/latest");
+        renderArtifact(data.artifact || null);
+      } catch (err) {
+        renderError("artifactStatus", err.message);
+      }
+    }
+
+    function downloadArtifact(artifactId, type) {
+      window.location.href = `/api/admin/artifacts/download?artifact_id=${encodeURIComponent(artifactId)}&type=${encodeURIComponent(type)}`;
+    }
+
+    async function loadAuditLogs() {
+      try {
+        const data = await api("/api/admin/audit-logs?limit=20");
+        renderAuditLogs(data.items || []);
+        setStatus("auditStatus", `최근 ${escapeHtml((data.items || []).length)}건을 표시 중입니다.`, "success");
+      } catch (err) {
+        renderError("auditStatus", err.message);
+      }
+    }
+
+    async function refreshAll() {
+      await Promise.allSettled([
+        loadSettings(),
+        loadUsers(),
+        loadSubmissions(),
+        loadArtifact(),
+        loadAuditLogs()
+      ]);
+    }
+
+    async function init() {
+      try {
+        await requireAdmin();
+        await refreshAll();
+      } catch (err) {
+        if (err.message !== "admin-required") {
+          renderError("artifactStatus", err.message);
+        }
+      }
+    }
+
+    init();
+  </script>
+</body>
+</html>
