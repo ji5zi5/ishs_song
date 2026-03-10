@@ -12,7 +12,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from radio_app.db import DB, utc_now_iso
-from radio_app.services.rounds import close_round
+from radio_app.services.rounds import close_round, select_round_for_admin_close
 
 
 class RoundLogicTest(unittest.TestCase):
@@ -159,6 +159,42 @@ class RoundLogicTest(unittest.TestCase):
             self.assertIsNone(round_row["close_job_key"])
             artifact = conn.execute("SELECT * FROM round_artifacts WHERE round_id = ?", (round_id,)).fetchone()
             self.assertIsNone(artifact)
+
+    def test_select_round_for_admin_close_recovers_stale_closing_round(self) -> None:
+        with self.db.session() as conn:
+            conn.execute("INSERT INTO users(riro_user_key, display_name, is_admin_approved, created_at) VALUES ('u1', 'u1', 1, ?)", (utc_now_iso(),))
+            conn.execute(
+                """
+                INSERT INTO rounds(cadence, status, start_at, end_at, playlist_size, target_seconds, loudnorm_enabled, close_job_key, created_at)
+                VALUES ('monthly', 'closing', ?, ?, 12, 2400, 0, 'stale-job', ?)
+                """,
+                ("2026-02-28T15:00:00Z", "2026-03-31T15:00:00Z", utc_now_iso()),
+            )
+            stale_round_id = int(conn.execute("SELECT id FROM rounds ORDER BY id DESC LIMIT 1").fetchone()["id"])
+            conn.execute(
+                "INSERT INTO songs(spotify_track_id, title, artist, album_art_url, external_url, created_at) VALUES ('stale-song', 'Stale', 'Artist', '', '', ?)",
+                (utc_now_iso(),),
+            )
+            song_id = int(conn.execute("SELECT id FROM songs WHERE spotify_track_id = 'stale-song'").fetchone()["id"])
+            conn.execute(
+                "INSERT INTO submissions(round_id, user_id, song_id, submitted_at) VALUES (?, 1, ?, ?)",
+                (stale_round_id, song_id, utc_now_iso()),
+            )
+            conn.execute(
+                """
+                INSERT INTO rounds(cadence, status, start_at, end_at, playlist_size, target_seconds, loudnorm_enabled, created_at)
+                VALUES ('monthly', 'open', ?, ?, 12, 2400, 0, ?)
+                """,
+                ("2026-02-28T15:00:00Z", "2026-03-31T15:00:00Z", utc_now_iso()),
+            )
+
+            selected = select_round_for_admin_close(conn, 'Asia/Seoul')
+
+            self.assertEqual(int(selected['id']), stale_round_id)
+            refreshed = conn.execute("SELECT status, close_job_key FROM rounds WHERE id = ?", (stale_round_id,)).fetchone()
+            self.assertEqual(refreshed['status'], 'open')
+            self.assertIsNone(refreshed['close_job_key'])
+
 
 
 if __name__ == "__main__":

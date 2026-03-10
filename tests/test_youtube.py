@@ -239,7 +239,7 @@ class EnsureAudioForSongsTest(unittest.TestCase):
             )
             row = conn.execute(
                 """
-                SELECT s.id AS submission_id, so.title, so.artist, a.file_path, a.is_valid
+                SELECT s.id AS submission_id, so.title, so.artist, a.file_path, a.is_valid, a.duration_seconds
                 FROM submissions s
                 JOIN songs so ON so.id = s.song_id
                 LEFT JOIN audio_assets a ON a.song_id = s.song_id
@@ -249,7 +249,39 @@ class EnsureAudioForSongsTest(unittest.TestCase):
 
             with patch("radio_app.services.youtube.validate_mp3_and_get_duration_seconds", return_value=(180, None)):
                 results = ensure_audio_for_songs(conn, [row], self.root / "uploads")
-            self.assertEqual(results[1], "already-exists")
+            self.assertEqual(results[1], "revalidated-existing")
+
+    @patch("radio_app.services.youtube.search_and_download")
+    def test_revalidates_existing_file_even_when_asset_marked_invalid(self, mock_dl: MagicMock) -> None:
+        media = self.root / "stale-invalid.mp3"
+        media.write_bytes(b"fake_audio" * 100)
+
+        with self.db.session() as conn:
+            self._seed_song(conn, "t4", "Song4", "Artist4")
+            conn.execute(
+                "INSERT INTO audio_assets(song_id, file_path, duration_seconds, is_valid, validation_error, uploaded_at) VALUES (1, ?, 0, 0, 'unable-to-parse-mp3-duration', ?)",
+                (str(media), utc_now_iso()),
+            )
+            row = conn.execute(
+                """
+                SELECT s.id AS submission_id, so.title, so.artist, a.file_path, a.is_valid, a.duration_seconds
+                FROM submissions s
+                JOIN songs so ON so.id = s.song_id
+                LEFT JOIN audio_assets a ON a.song_id = s.song_id
+                WHERE s.id = 1
+                """,
+            ).fetchone()
+
+            with patch("radio_app.services.youtube.validate_mp3_and_get_duration_seconds", return_value=(1791, None)):
+                results = ensure_audio_for_songs(conn, [row], self.root / "uploads")
+
+            self.assertEqual(results[1], "revalidated-existing")
+            asset = conn.execute("SELECT * FROM audio_assets WHERE song_id = 1").fetchone()
+            self.assertEqual(asset["duration_seconds"], 1791)
+            self.assertEqual(int(asset["is_valid"]), 1)
+            self.assertIsNone(asset["validation_error"])
+            mock_dl.assert_not_called()
+
 
     @patch("radio_app.services.youtube.search_and_download")
     def test_downloads_when_audio_missing(self, mock_dl: MagicMock) -> None:
@@ -268,7 +300,7 @@ class EnsureAudioForSongsTest(unittest.TestCase):
             self._seed_song(conn, "t1", "Song1", "Artist1")
             row = conn.execute(
                 """
-                SELECT s.id AS submission_id, so.title, so.artist, a.file_path, a.is_valid
+                SELECT s.id AS submission_id, so.title, so.artist, a.file_path, a.is_valid, a.duration_seconds
                 FROM submissions s
                 JOIN songs so ON so.id = s.song_id
                 LEFT JOIN audio_assets a ON a.song_id = s.song_id
@@ -301,7 +333,7 @@ class EnsureAudioForSongsTest(unittest.TestCase):
             self._seed_song(conn, "t2", "Song2", "Artist2")
             row = conn.execute(
                 """
-                SELECT s.id AS submission_id, so.title, so.artist, a.file_path, a.is_valid
+                SELECT s.id AS submission_id, so.title, so.artist, a.file_path, a.is_valid, a.duration_seconds
                 FROM submissions s
                 JOIN songs so ON so.id = s.song_id
                 LEFT JOIN audio_assets a ON a.song_id = s.song_id
@@ -331,7 +363,7 @@ class EnsureAudioForSongsTest(unittest.TestCase):
             self._seed_song(conn, "t3", "Song3", "Artist3")
             row = conn.execute(
                 """
-                SELECT s.id AS submission_id, so.title, so.artist, a.file_path, a.is_valid
+                SELECT s.id AS submission_id, so.title, so.artist, a.file_path, a.is_valid, a.duration_seconds
                 FROM submissions s
                 JOIN songs so ON so.id = s.song_id
                 LEFT JOIN audio_assets a ON a.song_id = s.song_id

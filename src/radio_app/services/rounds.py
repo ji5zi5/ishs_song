@@ -109,6 +109,55 @@ def ensure_open_round(conn: sqlite3.Connection, timezone_name: str) -> sqlite3.R
     return conn.execute("SELECT * FROM rounds ORDER BY id DESC LIMIT 1").fetchone()
 
 
+def select_round_for_admin_close(conn: sqlite3.Connection, timezone_name: str) -> sqlite3.Row:
+    open_round = ensure_open_round(conn, timezone_name)
+    now_iso = utc_now_iso()
+    stale_closing_round = conn.execute(
+        """
+        SELECT r.*
+        FROM rounds r
+        WHERE r.status = 'closing'
+          AND r.start_at <= ?
+          AND r.end_at > ?
+        ORDER BY r.id DESC
+        LIMIT 1
+        """,
+        (now_iso, now_iso),
+    ).fetchone()
+    if stale_closing_round is None:
+        return open_round
+
+    open_submission_count = int(
+        conn.execute(
+            "SELECT COUNT(*) AS cnt FROM submissions WHERE round_id = ?",
+            (int(open_round["id"]),),
+        ).fetchone()["cnt"]
+    )
+    stale_submission_count = int(
+        conn.execute(
+            "SELECT COUNT(*) AS cnt FROM submissions WHERE round_id = ?",
+            (int(stale_closing_round["id"]),),
+        ).fetchone()["cnt"]
+    )
+    has_artifact = conn.execute(
+        "SELECT 1 FROM round_artifacts WHERE round_id = ?",
+        (int(stale_closing_round["id"]),),
+    ).fetchone()
+    if stale_submission_count > 0 and open_submission_count == 0 and has_artifact is None:
+        conn.execute(
+            "UPDATE rounds SET status = 'open', close_job_key = NULL WHERE id = ?",
+            (int(stale_closing_round["id"]),),
+        )
+        conn.commit()
+        reopened = conn.execute(
+            "SELECT * FROM rounds WHERE id = ?",
+            (int(stale_closing_round["id"]),),
+        ).fetchone()
+        if reopened is not None:
+            return reopened
+    return open_round
+
+
 def enforce_rate_limit(
     conn: sqlite3.Connection,
     user_id: int,

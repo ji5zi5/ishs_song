@@ -22,6 +22,7 @@ from radio_app.services.rounds import (
     get_round_result,
     get_setting,
     ranked_submissions,
+    select_round_for_admin_close,
     set_setting,
 )
 from radio_app.services.riro import check_riro_login
@@ -545,15 +546,27 @@ class RadioHTTPRequestHandler(BaseHTTPRequestHandler):
             user = self._require_auth(conn, required=True, admin=True)
             if not user:
                 return
-            round_row = ensure_open_round(conn, self.ctx.cfg.timezone)
-            result = close_round(
-                conn,
-                int(round_row["id"]),
-                artifacts_dir=self.ctx.cfg.artifacts_dir,
-                uploads_dir=self.ctx.cfg.uploads_dir,
-                ffmpeg_path=self.ctx.cfg.ffmpeg_path,
-                yt_dlp_enabled=self.ctx.cfg.yt_dlp_enabled,
-            )
+            round_row = select_round_for_admin_close(conn, self.ctx.cfg.timezone)
+            try:
+                result = close_round(
+                    conn,
+                    int(round_row["id"]),
+                    artifacts_dir=self.ctx.cfg.artifacts_dir,
+                    uploads_dir=self.ctx.cfg.uploads_dir,
+                    ffmpeg_path=self.ctx.cfg.ffmpeg_path,
+                    yt_dlp_enabled=self.ctx.cfg.yt_dlp_enabled,
+                )
+            except RuntimeError as exc:
+                if str(exc) == "no-valid-audio-assets":
+                    return self._send_json(
+                        {
+                            "error": "no-valid-audio-assets",
+                            "message": "마감할 수 있는 유효한 음원이 없습니다.",
+                            "round_id": int(round_row["id"]),
+                        },
+                        status=HTTPStatus.CONFLICT,
+                    )
+                raise
             summary_row = conn.execute(
                 """
                 SELECT ra.*, r.cadence, r.start_at, r.end_at

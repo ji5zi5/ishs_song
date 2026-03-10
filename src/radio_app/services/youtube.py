@@ -298,14 +298,56 @@ def ensure_audio_for_songs(
     yt_dir = uploads_dir / "youtube"
     yt_dir.mkdir(parents=True, exist_ok=True)
 
+    def _restore_existing_audio_asset(submission_id: int, song_id: int, path: Path) -> str | None:
+        duration, error = validate_mp3_and_get_duration_seconds(path)
+        if error or duration <= 0:
+            return None
+
+        from radio_app.db import utc_now_iso
+
+        conn.execute(
+            """
+            INSERT INTO audio_assets(song_id, file_path, duration_seconds, is_valid, validation_error, uploaded_at)
+            VALUES (?, ?, ?, 1, NULL, ?)
+            ON CONFLICT(song_id) DO UPDATE SET
+                file_path = excluded.file_path,
+                duration_seconds = excluded.duration_seconds,
+                is_valid = 1,
+                validation_error = NULL,
+                uploaded_at = excluded.uploaded_at
+            """,
+            (song_id, str(path), duration, utc_now_iso()),
+        )
+        logger.info("revalidated existing audio for submission=%s → %s (%ds)", submission_id, path, duration)
+        return "revalidated-existing"
+
     for song in songs:
         sub_id = int(song["submission_id"])
+        submission_row = conn.execute(
+            "SELECT song_id, round_id FROM submissions WHERE id = ?",
+            (sub_id,),
+        ).fetchone()
+        if submission_row is None:
+            results[sub_id] = "submission-not-found"
+            continue
+        song_id = int(submission_row["song_id"])
+        round_id = int(submission_row["round_id"])
         file_path = song["file_path"]
         is_valid = int(song["is_valid"]) if song["is_valid"] is not None else 0
 
-        if file_path and is_valid and Path(file_path).exists():
-            existing_duration, existing_error = validate_mp3_and_get_duration_seconds(Path(file_path))
+        if file_path and Path(file_path).exists():
+            existing_path = Path(file_path)
+            existing_duration, existing_error = validate_mp3_and_get_duration_seconds(existing_path)
             if not existing_error and existing_duration > 0:
+                try:
+                    stored_duration = int(song["duration_seconds"] or 0)
+                except (IndexError, KeyError):
+                    stored_duration = 0
+                if not is_valid or stored_duration != existing_duration:
+                    restored = _restore_existing_audio_asset(sub_id, song_id, existing_path)
+                    if restored:
+                        results[sub_id] = restored
+                        continue
                 results[sub_id] = "already-exists"
                 continue
             logger.warning("existing audio invalid for submission=%s: %s", sub_id, existing_error)
@@ -327,15 +369,6 @@ def ensure_audio_for_songs(
             download.path.unlink(missing_ok=True)
             results[sub_id] = f"invalid-download:{error}"
             continue
-
-        row = conn.execute(
-            "SELECT song_id, round_id FROM submissions WHERE id = ?", (sub_id,)
-        ).fetchone()
-        if row is None:
-            results[sub_id] = "submission-not-found"
-            continue
-        song_id = int(row["song_id"])
-        round_id = int(row["round_id"])
 
         from radio_app.db import utc_now_iso
 

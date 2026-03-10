@@ -275,6 +275,19 @@ class AdminApiTest(unittest.TestCase):
         self.assertNotIn("mp3_path", payload["artifact"])
         self.assertNotIn("generation_log", payload["artifact"])
 
+    def test_admin_close_round_returns_conflict_for_no_valid_audio(self) -> None:
+        with mock.patch("radio_app.app.close_round", side_effect=RuntimeError("no-valid-audio-assets")):
+            status, _, payload = self._request_json(
+                "/api/admin/rounds/close",
+                method="POST",
+                body={},
+                cookie=self.admin_cookie,
+            )
+        self.assertEqual(status, 409)
+        self.assertEqual(payload["error"], "no-valid-audio-assets")
+        self.assertIn("유효한 음원", payload["message"])
+
+
     def test_unexpected_errors_are_sanitized_for_get_post_and_put(self) -> None:
         with mock.patch("radio_app.app.LOGGER.exception"):
             with mock.patch.object(self.server.RequestHandlerClass, "_handle_public_songs", side_effect=RuntimeError("secret-get")):
