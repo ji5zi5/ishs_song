@@ -4,3 +4,5 @@ data/
 uploads/
 artifacts/
 .DS_Store
+
+.worktrees/
