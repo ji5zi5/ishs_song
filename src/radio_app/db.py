@@ -141,7 +141,22 @@ class DB:
                 );
                 """
             )
+            self._ensure_round_close_columns(conn)
             self._seed_defaults(conn)
+
+    def _ensure_round_close_columns(self, conn: sqlite3.Connection) -> None:
+        columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(rounds)").fetchall()}
+        additions = {
+            "close_phase": "ALTER TABLE rounds ADD COLUMN close_phase TEXT",
+            "close_message": "ALTER TABLE rounds ADD COLUMN close_message TEXT",
+            "close_progress": "ALTER TABLE rounds ADD COLUMN close_progress INTEGER NOT NULL DEFAULT 0",
+            "close_started_at": "ALTER TABLE rounds ADD COLUMN close_started_at TEXT",
+            "close_finished_at": "ALTER TABLE rounds ADD COLUMN close_finished_at TEXT",
+            "close_error": "ALTER TABLE rounds ADD COLUMN close_error TEXT",
+        }
+        for name, sql in additions.items():
+            if name not in columns:
+                conn.execute(sql)
 
     def _seed_defaults(self, conn: sqlite3.Connection) -> None:
         defaults = {

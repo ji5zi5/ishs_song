@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+import threading
+import uuid
 from dataclasses import dataclass
 from http import HTTPStatus
 from http.cookies import SimpleCookie
@@ -81,6 +83,8 @@ class RadioHTTPRequestHandler(BaseHTTPRequestHandler):
                 return self._handle_admin_latest_artifact()
             if path == "/api/admin/artifacts/download":
                 return self._handle_admin_artifact_download()
+            if path == "/api/admin/rounds/close-status":
+                return self._handle_admin_close_status()
             self._send_json({"error": "not-found"}, status=HTTPStatus.NOT_FOUND)
         except Exception as exc:
             self._handle_unexpected_error(exc)
@@ -541,55 +545,302 @@ class RadioHTTPRequestHandler(BaseHTTPRequestHandler):
             content_type = "audio/mpeg" if artifact_type == "mp3" else "audio/x-mpegurl; charset=utf-8"
             self._send_file(file_path, content_type, download_name)
 
+    def _handle_admin_close_status(self) -> None:
+        with self.ctx.db.session() as conn:
+            user = self._require_auth(conn, required=True, admin=True)
+            if not user:
+                return
+            self._send_json(self._close_status_payload(conn, self._select_latest_close_round(conn)))
+
     def _handle_admin_close_round(self) -> None:
         with self.ctx.db.session() as conn:
             user = self._require_auth(conn, required=True, admin=True)
             if not user:
                 return
+            active_round = self._select_active_close_round(conn)
+            if active_round is not None:
+                return self._send_json(self._close_status_payload(conn, active_round), status=HTTPStatus.ACCEPTED)
             round_row = select_round_for_admin_close(conn, self.ctx.cfg.timezone)
+            round_id = int(round_row["id"])
+            job_id = uuid.uuid4().hex
+            now = utc_now_iso()
+            conn.execute(
+                """
+                UPDATE rounds
+                SET status = 'closing',
+                    close_job_key = ?,
+                    close_phase = ?,
+                    close_message = ?,
+                    close_progress = ?,
+                    close_started_at = ?,
+                    close_finished_at = NULL,
+                    close_error = NULL
+                WHERE id = ?
+                """,
+                (job_id, "queued", "마감 작업을 시작하는 중입니다.", 0, now, round_id),
+            )
+            state_row = conn.execute("SELECT * FROM rounds WHERE id = ?", (round_id,)).fetchone()
+        worker = threading.Thread(
+            target=self._run_admin_close_round_job,
+            args=(job_id, round_id, user.id),
+            daemon=True,
+        )
+        worker.start()
+        self._send_json(self._close_status_payload_from_row(state_row), status=HTTPStatus.ACCEPTED)
+
+    def _run_admin_close_round_job(self, job_id: str, round_id: int, actor_user_id: int) -> None:
+        with self.ctx.db.session() as conn:
+            def report(stage: str, message: str, progress_percent: int) -> None:
+                self._update_close_state(
+                    conn,
+                    round_id,
+                    job_id,
+                    phase=stage,
+                    message=message,
+                    progress_percent=progress_percent,
+                )
+
             try:
                 result = close_round(
                     conn,
-                    int(round_row["id"]),
+                    round_id,
                     artifacts_dir=self.ctx.cfg.artifacts_dir,
                     uploads_dir=self.ctx.cfg.uploads_dir,
                     ffmpeg_path=self.ctx.cfg.ffmpeg_path,
                     yt_dlp_enabled=self.ctx.cfg.yt_dlp_enabled,
+                    progress_callback=report,
+                    already_marked_closing=True,
                 )
+                summary_row = conn.execute(
+                    """
+                    SELECT ra.*, r.cadence, r.start_at, r.end_at
+                    FROM round_artifacts ra
+                    JOIN rounds r ON r.id = ra.round_id
+                    WHERE ra.round_id = ?
+                    """,
+                    (round_id,),
+                ).fetchone()
+                response_payload = {
+                    key: value
+                    for key, value in result.items()
+                    if key not in {"m3u_path", "mp3_path", "generation_log", "artifact"}
+                }
+                response_payload["artifact"] = self._artifact_summary_payload(summary_row) if summary_row else None
+                self._insert_audit_log(
+                    conn,
+                    action="manual_close",
+                    detail=response_payload,
+                    actor_user_id=actor_user_id,
+                    round_id=round_id,
+                )
+                self._mark_close_completed(conn, round_id, job_id)
             except RuntimeError as exc:
                 if str(exc) == "no-valid-audio-assets":
-                    return self._send_json(
-                        {
-                            "error": "no-valid-audio-assets",
-                            "message": "마감할 수 있는 유효한 음원이 없습니다.",
-                            "round_id": int(round_row["id"]),
-                        },
-                        status=HTTPStatus.CONFLICT,
+                    self._mark_close_failed(
+                        conn,
+                        round_id,
+                        job_id,
+                        error_code="no-valid-audio-assets",
+                        message="마감할 수 있는 유효한 음원이 없습니다.",
                     )
-                raise
-            summary_row = conn.execute(
-                """
-                SELECT ra.*, r.cadence, r.start_at, r.end_at
-                FROM round_artifacts ra
-                JOIN rounds r ON r.id = ra.round_id
-                WHERE ra.round_id = ?
-                """,
-                (int(round_row["id"]),),
-            ).fetchone()
-            response_payload = {
-                key: value
-                for key, value in result.items()
-                if key not in {"m3u_path", "mp3_path", "generation_log", "artifact"}
+                    return
+                LOGGER.exception("Manual close job failed", extra={"round_id": round_id, "job_id": job_id})
+                self._mark_close_failed(
+                    conn,
+                    round_id,
+                    job_id,
+                    error_code="close-job-failed",
+                    message="월 마감 중 오류가 발생했습니다.",
+                )
+            except Exception:
+                LOGGER.exception("Manual close job failed", extra={"round_id": round_id, "job_id": job_id})
+                self._mark_close_failed(
+                    conn,
+                    round_id,
+                    job_id,
+                    error_code="close-job-failed",
+                    message="월 마감 중 오류가 발생했습니다.",
+                )
+
+    def _select_active_close_round(self, conn: sqlite3.Connection) -> sqlite3.Row | None:
+        return conn.execute(
+            """
+            SELECT *
+            FROM rounds
+            WHERE status = 'closing'
+            ORDER BY COALESCE(close_started_at, created_at) DESC, id DESC
+            LIMIT 1
+            """
+        ).fetchone()
+
+    def _select_latest_close_round(self, conn: sqlite3.Connection) -> sqlite3.Row | None:
+        active_row = self._select_active_close_round(conn)
+        if active_row is not None:
+            return active_row
+        return conn.execute(
+            """
+            SELECT *
+            FROM rounds
+            WHERE close_started_at IS NOT NULL OR close_phase IN ('completed', 'failed')
+            ORDER BY COALESCE(close_finished_at, close_started_at, created_at) DESC, id DESC
+            LIMIT 1
+            """
+        ).fetchone()
+
+    def _update_close_state(
+        self,
+        conn: sqlite3.Connection,
+        round_id: int,
+        job_id: str,
+        *,
+        phase: str,
+        message: str,
+        progress_percent: int,
+    ) -> None:
+        conn.execute(
+            """
+            UPDATE rounds
+            SET close_phase = ?,
+                close_message = ?,
+                close_progress = ?,
+                close_error = NULL
+            WHERE id = ? AND close_job_key = ?
+            """,
+            (phase, message, max(0, min(100, progress_percent)), round_id, job_id),
+        )
+        conn.commit()
+
+    def _mark_close_completed(self, conn: sqlite3.Connection, round_id: int, job_id: str) -> None:
+        conn.execute(
+            """
+            UPDATE rounds
+            SET close_phase = 'completed',
+                close_message = ?,
+                close_progress = 100,
+                close_finished_at = ?,
+                close_error = NULL
+            WHERE id = ? AND close_job_key = ?
+            """,
+            ("월 마감이 완료되었습니다.", utc_now_iso(), round_id, job_id),
+        )
+
+    def _mark_close_failed(
+        self,
+        conn: sqlite3.Connection,
+        round_id: int,
+        job_id: str,
+        *,
+        error_code: str,
+        message: str,
+    ) -> None:
+        conn.execute(
+            """
+            UPDATE rounds
+            SET close_phase = 'failed',
+                close_message = ?,
+                close_finished_at = ?,
+                close_error = ?
+            WHERE id = ? AND close_job_key = ?
+            """,
+            (
+                message,
+                utc_now_iso(),
+                json.dumps({"code": error_code, "message": message}, ensure_ascii=True),
+                round_id,
+                job_id,
+            ),
+        )
+
+    def _close_status_payload(self, conn: sqlite3.Connection, row: sqlite3.Row | None) -> dict[str, Any]:
+        payload = self._close_status_payload_from_row(row)
+        if row is None:
+            return payload
+        round_id = int(row["id"])
+        if payload["status"] == "succeeded":
+            payload["result"] = self._close_result_payload(conn, round_id)
+        elif payload["status"] == "failed":
+            payload["error"] = self._parse_close_error(str(row["close_error"] or ""), payload["message"])
+        return payload
+
+    def _close_status_payload_from_row(self, row: sqlite3.Row | None) -> dict[str, Any]:
+        if row is None:
+            return {
+                "job_id": None,
+                "status": "idle",
+                "round_id": None,
+                "stage": None,
+                "message": None,
+                "progress_percent": 0,
+                "started_at": None,
+                "updated_at": None,
+                "finished_at": None,
+                "result": None,
+                "error": None,
             }
-            response_payload["artifact"] = self._artifact_summary_payload(summary_row) if summary_row else None
-            self._insert_audit_log(
-                conn,
-                action="manual_close",
-                detail=response_payload,
-                actor_user_id=user.id,
-                round_id=int(round_row["id"]),
-            )
-            self._send_json(response_payload)
+        phase = str(row["close_phase"] or "").strip()
+        status = "running"
+        if phase == "completed":
+            status = "succeeded"
+        elif phase == "failed":
+            status = "failed"
+        return {
+            "job_id": str(row["close_job_key"] or "").strip() or None,
+            "status": status,
+            "round_id": int(row["id"]),
+            "stage": phase or None,
+            "message": str(row["close_message"] or "").strip() or None,
+            "progress_percent": int(row["close_progress"] or 0),
+            "started_at": row["close_started_at"],
+            "updated_at": row["close_finished_at"] or row["close_started_at"],
+            "finished_at": row["close_finished_at"],
+            "result": None,
+            "error": None,
+        }
+
+    def _close_result_payload(self, conn: sqlite3.Connection, round_id: int) -> dict[str, Any] | None:
+        summary_row = conn.execute(
+            """
+            SELECT ra.*, r.cadence, r.start_at, r.end_at
+            FROM round_artifacts ra
+            JOIN rounds r ON r.id = ra.round_id
+            WHERE ra.round_id = ?
+            """,
+            (round_id,),
+        ).fetchone()
+        audit_row = conn.execute(
+            """
+            SELECT detail
+            FROM audit_logs
+            WHERE round_id = ? AND action = 'manual_close'
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (round_id,),
+        ).fetchone()
+        payload: dict[str, Any] = {}
+        if audit_row is not None:
+            try:
+                parsed = json.loads(str(audit_row["detail"] or "{}"))
+                if isinstance(parsed, dict):
+                    payload.update(parsed)
+            except json.JSONDecodeError:
+                pass
+        payload.setdefault("round_id", round_id)
+        if summary_row is not None:
+            artifact = self._artifact_summary_payload(summary_row)
+            payload.setdefault("total_seconds", int(summary_row["total_seconds"]))
+            payload["artifact"] = artifact
+        return payload or None
+
+    @staticmethod
+    def _parse_close_error(raw: str, fallback_message: str | None) -> dict[str, Any]:
+        try:
+            parsed = json.loads(raw or "{}")
+            if isinstance(parsed, dict) and parsed.get("message"):
+                return parsed
+        except json.JSONDecodeError:
+            pass
+        return {"code": "close-job-failed", "message": fallback_message or "월 마감 중 오류가 발생했습니다."}
 
     def _handle_admin_settings(self) -> None:
         body = self._read_json_body()

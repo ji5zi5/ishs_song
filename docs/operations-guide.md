@@ -29,16 +29,18 @@ curl -sS http://127.0.0.1:8092/api/public/current-round
 3. 필요한 경우 cadence, playlist size, target seconds 수정
 4. 사용자 목록에서 관리자 승인 처리
 5. 제출/투표가 끝났으면 수동 마감 실행
-6. 최신 artifact에서 `m3u` 또는 `mp3` 다운로드
-7. 운영 로그에서 `manual_close`, `youtube_audio_selected`, `retention_cleanup` 확인
+6. 진행 패널에서 단계별 진행률과 실패 사유를 확인
+7. 최신 artifact에서 `m3u` 또는 `mp3` 다운로드
+8. 운영 로그는 요약 카드 기준으로 먼저 보고, 필요한 항목만 펼쳐 상세 확인
+9. 운영 로그에서 `manual_close`, `youtube_audio_selected`, `retention_cleanup` 확인
 
 ## Admin Screen Sections
 - 운영 요약: 현재 유저 수, 관리자 수, 제출 수, 최근 상태
 - 기본 설정: 월간/주간, 곡 수, 목표 길이, loudnorm 여부
-- 수동 마감: 현재 열린 회차를 즉시 마감
+- 수동 마감: 현재 열린 회차를 즉시 마감하고, 진행 바에서 단계 상태를 표시
 - 관리자 승인: 특정 사용자에게 관리자 권한 부여/회수
 - 최근 아티팩트: 최신 `m3u/mp3` 다운로드
-- 운영 로그: 최근 관리 작업과 음원 선택 로그 확인
+- 운영 로그: 최근 관리 작업과 음원 선택 로그를 요약/펼침형으로 확인
 
 ## First Admin Bootstrap
 기본 유저는 관리자 권한이 없습니다. 첫 관리자는 DB에서 직접 올려야 합니다.

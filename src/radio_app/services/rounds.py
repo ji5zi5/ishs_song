@@ -5,11 +5,15 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Callable
 from zoneinfo import ZoneInfo
 
 from radio_app.db import utc_now_iso
 from radio_app.services.audio import merge_mp3_files, validate_mp3_and_get_duration_seconds
 from radio_app.services.youtube import ensure_audio_for_songs
+
+
+ProgressCallback = Callable[[str, str, int], None]
 
 
 @dataclass
@@ -28,6 +32,11 @@ def _parse_iso(ts: str) -> datetime:
     if ts.endswith("Z"):
         ts = ts[:-1] + "+00:00"
     return datetime.fromisoformat(ts)
+
+
+def _emit_progress(callback: ProgressCallback | None, stage: str, message: str, progress_percent: int) -> None:
+    if callback is not None:
+        callback(stage, message, progress_percent)
 
 
 def get_setting(conn: sqlite3.Connection, key: str, default: str) -> str:
@@ -225,6 +234,8 @@ def close_round(
     uploads_dir: Path | None = None,
     ffmpeg_path: str | None = None,
     yt_dlp_enabled: bool = True,
+    progress_callback: ProgressCallback | None = None,
+    already_marked_closing: bool = False,
 ) -> dict:
     row = conn.execute("SELECT * FROM rounds WHERE id = ?", (round_id,)).fetchone()
     if row is None:
@@ -236,15 +247,16 @@ def close_round(
             "round_id": round_id,
             "artifact": dict(existing) if existing else None,
         }
-    if row["status"] == "closing":
+    if row["status"] == "closing" and not already_marked_closing:
         return {"status": "already-closing", "round_id": round_id}
-
-    job_key = secrets.token_hex(8)
-    conn.execute(
-        "UPDATE rounds SET status = 'closing', close_job_key = ? WHERE id = ? AND status = 'open'",
-        (job_key, round_id),
-    )
-    conn.commit()
+    if not already_marked_closing:
+        job_key = secrets.token_hex(8)
+        conn.execute(
+            "UPDATE rounds SET status = 'closing', close_job_key = ? WHERE id = ? AND status = 'open'",
+            (job_key, round_id),
+        )
+        conn.commit()
+    _emit_progress(progress_callback, "preparing", "마감 대상을 준비하는 중입니다.", 5)
 
     m3u_path: Path | None = None
     mp3_path: Path | None = None
@@ -254,6 +266,7 @@ def close_round(
         # ── YouTube auto-download for songs without audio ──────────────
         yt_log_lines: list[str] = []
         if yt_dlp_enabled and uploads_dir:
+            _emit_progress(progress_callback, "ensuring-audio", "음원을 확보하는 중입니다.", 20)
             try:
                 yt_results = ensure_audio_for_songs(
                     conn, list(ranked), uploads_dir, ffmpeg_path=ffmpeg_path,
@@ -265,6 +278,7 @@ def close_round(
                 ranked = ranked_submissions(conn, round_id)
             except Exception as exc:
                 yt_log_lines.append(f"yt:batch-error:{exc}")
+        _emit_progress(progress_callback, "validating-audio", "음원 유효성을 확인하는 중입니다.", 45)
         selected: list[dict] = []
         skipped: list[str] = []
         for item in ranked:
@@ -294,6 +308,7 @@ def close_round(
             selected_item["duration_seconds"] = checked_duration
             selected.append(selected_item)
 
+        _emit_progress(progress_callback, "trimming-playlist", "재생 길이를 맞추는 중입니다.", 60)
         while selected and sum(int(s["duration_seconds"]) for s in selected) > int(row["target_seconds"]):
             dropped = selected.pop()
             skipped.append(f"drop:{dropped['submission_id']}:duration-trim")
@@ -304,6 +319,7 @@ def close_round(
         artifacts_dir.mkdir(parents=True, exist_ok=True)
         m3u_path = artifacts_dir / f"round-{round_id}.m3u"
         mp3_path = artifacts_dir / f"round-{round_id}.mp3"
+        _emit_progress(progress_callback, "writing-m3u", "재생목록 파일을 생성하는 중입니다.", 72)
         m3u_path.write_text(
             "#EXTM3U\n"
             + "".join(
@@ -313,6 +329,7 @@ def close_round(
             encoding="utf-8",
         )
 
+        _emit_progress(progress_callback, "merging-mp3", "합본 MP3를 생성하는 중입니다.", 86)
         merge_log = merge_mp3_files(
             [Path(str(item["file_path"])) for item in selected],
             mp3_path,
@@ -323,6 +340,7 @@ def close_round(
         all_log_parts = [merge_log] + yt_log_lines + skipped
         generation_log = "\n".join(all_log_parts)
         total_seconds = sum(int(s["duration_seconds"]) for s in selected)
+        _emit_progress(progress_callback, "finalizing", "마감 결과를 저장하는 중입니다.", 95)
         conn.execute(
             """
             INSERT INTO round_artifacts(round_id, m3u_path, mp3_path, total_seconds, generation_log, created_at)
@@ -365,10 +383,16 @@ def close_round(
             m3u_path.unlink(missing_ok=True)
         if mp3_path:
             mp3_path.unlink(missing_ok=True)
-        conn.execute(
-            "UPDATE rounds SET status = 'open', close_job_key = NULL WHERE id = ?",
-            (round_id,),
-        )
+        if already_marked_closing:
+            conn.execute(
+                "UPDATE rounds SET status = 'open' WHERE id = ?",
+                (round_id,),
+            )
+        else:
+            conn.execute(
+                "UPDATE rounds SET status = 'open', close_job_key = NULL WHERE id = ?",
+                (round_id,),
+            )
         conn.execute(
             "INSERT INTO audit_logs(round_id, action, detail, created_at) VALUES (?, ?, ?, ?)",
             (round_id, "close_failed", str(exc), utc_now_iso()),

@@ -95,6 +95,44 @@ class RoundLogicTest(unittest.TestCase):
             self.assertTrue(Path(artifact["m3u_path"]).exists())
             self.assertTrue(Path(artifact["mp3_path"]).exists())
 
+    def test_close_round_reports_progress_stages_in_order(self) -> None:
+        round_id = self._seed_base()
+        progress_events: list[tuple[str, str, int]] = []
+        with self.db.session() as conn:
+            for idx in range(1, 3):
+                conn.execute(
+                    "INSERT INTO songs(spotify_track_id, title, artist, album_art_url, external_url, created_at) VALUES (?, ?, 'a', '', '', ?)",
+                    (f"p{idx}", f"Progress{idx}", utc_now_iso()),
+                )
+                song_id = int(conn.execute("SELECT id FROM songs WHERE spotify_track_id = ?", (f"p{idx}",)).fetchone()["id"])
+                conn.execute(
+                    "INSERT INTO submissions(round_id, user_id, song_id, submitted_at) VALUES (?, 1, ?, ?)",
+                    (round_id, song_id, f"2026-03-0{idx}T00:00:00Z"),
+                )
+                media = self.root / f"s{idx}.mp3"
+                media.write_bytes(b"audio")
+                conn.execute(
+                    "INSERT INTO audio_assets(song_id, file_path, duration_seconds, is_valid, validation_error, uploaded_at) VALUES (?, ?, 50, 1, NULL, ?)",
+                    (song_id, str(media), utc_now_iso()),
+                )
+
+            with (
+                patch("radio_app.services.rounds.validate_mp3_and_get_duration_seconds", side_effect=self._fake_validate_mp3),
+                patch("radio_app.services.rounds.merge_mp3_files", side_effect=self._fake_merge_mp3_files),
+            ):
+                close_round(
+                    conn,
+                    round_id,
+                    self.root / "artifacts",
+                    progress_callback=lambda stage, message, percent: progress_events.append((stage, message, percent)),
+                )
+
+        self.assertEqual(
+            [stage for stage, _, _ in progress_events],
+            ["preparing", "validating-audio", "trimming-playlist", "writing-m3u", "merging-mp3", "finalizing"],
+        )
+        self.assertTrue(all(progress_events[idx][2] <= progress_events[idx + 1][2] for idx in range(len(progress_events) - 1)))
+
     def test_close_round_replaces_invalid_audio_with_next_ranked(self) -> None:
         round_id = self._seed_base()
         with self.db.session() as conn:

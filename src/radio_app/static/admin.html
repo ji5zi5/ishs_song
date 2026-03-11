@@ -159,6 +159,11 @@
 
     .full { grid-column: 1 / -1; }
 
+    .audit-panel {
+      align-content: start;
+      min-height: 0;
+    }
+
     .panel-head {
       display: flex;
       justify-content: space-between;
@@ -297,6 +302,12 @@
       color: #2c5b40;
     }
 
+    .status-box.running {
+      border-color: #c9ddf3;
+      background: #f5f9ff;
+      color: #21507b;
+    }
+
     .pill-row {
       display: flex;
       gap: 8px;
@@ -333,10 +344,122 @@
       gap: 10px;
     }
 
+    .audit-scroll {
+      max-height: 420px;
+      overflow-y: auto;
+      padding-right: 4px;
+    }
+
+    .audit-list {
+      align-content: start;
+    }
+
+    .audit-scroll::-webkit-scrollbar {
+      width: 10px;
+    }
+
+    .audit-scroll::-webkit-scrollbar-thumb {
+      border-radius: 999px;
+      border: 2px solid transparent;
+      background: #c3decf;
+      background-clip: padding-box;
+    }
+
+    .audit-scroll::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
     .list-card {
       padding: 12px;
       display: grid;
       gap: 10px;
+    }
+
+    .progress-card {
+      display: grid;
+      gap: 10px;
+      padding: 12px;
+      border: 1px solid #d4e8dc;
+      border-radius: 12px;
+      background: linear-gradient(180deg, #f8fcf9 0%, #eef8f1 100%);
+    }
+
+    .progress-card[hidden] {
+      display: none;
+    }
+
+    .progress-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .progress-title {
+      display: grid;
+      gap: 3px;
+    }
+
+    .progress-track {
+      width: 100%;
+      height: 10px;
+      border-radius: 999px;
+      background: #dfefe4;
+      overflow: hidden;
+    }
+
+    .progress-fill {
+      height: 100%;
+      width: 0%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, var(--primary) 0%, var(--secondary) 100%);
+      transition: width .25s ease;
+    }
+
+    .progress-meta {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+      font-size: 13px;
+      color: #4d6f5d;
+    }
+
+    .audit-card {
+      gap: 8px;
+    }
+
+    .audit-summary {
+      font-size: 13px;
+      line-height: 1.5;
+      color: #274232;
+    }
+
+    .audit-details {
+      border-top: 1px solid #dcebe1;
+      padding-top: 8px;
+    }
+
+    .audit-details summary {
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 700;
+      color: #4c6f5d;
+      list-style: none;
+    }
+
+    .audit-details summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .audit-details .note {
+      margin-top: 8px;
+      padding: 10px;
+      font-size: 12px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      word-break: break-word;
     }
 
     .row {
@@ -386,6 +509,10 @@
       .grid,
       .inline {
         grid-template-columns: 1fr;
+      }
+
+      .audit-scroll {
+        max-height: 320px;
       }
     }
   </style>
@@ -485,7 +612,24 @@
           마감 후 최신 아티팩트와 운영 로그를 자동으로 새로고침합니다. 예상치 못한 실패는 브라우저에 내부 오류를 노출하지 않고 로그로 남깁니다.
         </div>
         <div class="panel-actions">
-          <button type="button" class="warn" onclick="manualClose()">현재 월 마감 실행</button>
+          <button type="button" class="warn" id="closeButton" onclick="manualClose()">현재 월 마감 실행</button>
+        </div>
+        <div class="muted" id="closeHint">현재 월 마감 중에는 다시 누를 수 없습니다.</div>
+        <div class="progress-card" id="closeProgress" hidden>
+          <div class="progress-head">
+            <div class="progress-title">
+              <strong id="closePhase">대기 중</strong>
+              <span class="muted" id="closeStageMessage">월 마감 시작 전입니다.</span>
+            </div>
+            <span class="badge" id="closeStateBadge">IDLE</span>
+          </div>
+          <div class="progress-track" aria-hidden="true">
+            <div class="progress-fill" id="closeProgressBar"></div>
+          </div>
+          <div class="progress-meta">
+            <span id="closeProgressPercent">0%</span>
+            <span id="closeProgressRound">대상 월 -</span>
+          </div>
         </div>
         <div class="status-box" id="closeStatus" aria-live="polite">아직 실행하지 않았습니다.</div>
       </article>
@@ -531,7 +675,7 @@
         <div class="status-box" id="artifactStatus" aria-live="polite">아티팩트를 불러오는 중입니다.</div>
       </article>
 
-      <article class="panel" aria-labelledby="audit-title">
+      <article class="panel audit-panel" aria-labelledby="audit-title">
         <div class="panel-head">
           <div>
             <h2 id="audit-title">최근 운영 로그</h2>
@@ -542,7 +686,9 @@
           </div>
         </div>
         <div class="status-box" id="auditStatus" aria-live="polite">운영 로그를 불러오는 중입니다.</div>
-        <div class="list" id="auditList"></div>
+        <div class="audit-scroll">
+          <div class="list audit-list" id="auditList"></div>
+        </div>
       </article>
 
       <article class="panel full" aria-labelledby="ops-title">
@@ -565,6 +711,8 @@
     let cachedUsers = [];
     let cachedSubmissions = [];
     let cachedArtifact = null;
+    let closePollTimer = null;
+    let closePollBusy = false;
 
     async function api(path, method = "GET", body = null) {
       const res = await fetch(path, {
@@ -725,6 +873,44 @@
       );
     }
 
+    function parseAuditDetail(detail) {
+      if (!detail) return null;
+      try {
+        return JSON.parse(detail);
+      } catch (_err) {
+        return null;
+      }
+    }
+
+    function summarizeAuditItem(item) {
+      const parsed = parseAuditDetail(item.detail);
+      if (item.action === "manual_close" && parsed) {
+        return `선정 ${parsed.selected_count ?? "-"}곡 / 총 ${parsed.total_seconds ?? "-"}초`;
+      }
+      if (item.action === "close_failed") {
+        return item.detail || "마감 실패";
+      }
+      if (item.action === "youtube_audio_selected" && parsed) {
+        return `${parsed.title || "-"} / ${parsed.confidence || "-"} / score ${parsed.score ?? "-"}`;
+      }
+      if (item.action === "settings_updated" && parsed) {
+        return `주기 ${parsed.cadence || "-"} / ${parsed.playlist_size ?? "-"}곡 / ${parsed.target_seconds ?? "-"}초`;
+      }
+      if (item.action === "admin_approval_changed" && parsed) {
+        return `user ${parsed.user_id ?? "-"} → ${parsed.approved ? "관리자 승인" : "권한 회수"}`;
+      }
+      if (item.action === "retention_cleanup" && parsed) {
+        return `uploads ${parsed.deleted_audio_assets ?? 0}건 / artifacts ${parsed.deleted_artifacts ?? 0}건 정리`;
+      }
+      return String(item.detail || "-");
+    }
+
+    function auditBadgeClass(item) {
+      if (item.action === "close_failed") return "danger";
+      if (item.action === "manual_close" || item.action === "youtube_audio_selected") return "";
+      return "warn";
+    }
+
     function renderAuditLogs(items) {
       if (!items.length) {
         setListHtml("auditList", '<div class="empty">아직 기록된 운영 로그가 없습니다.</div>');
@@ -733,7 +919,7 @@
       setListHtml(
         "auditList",
         items.map((item) => `
-          <article class="list-card">
+          <article class="list-card audit-card">
             <div class="row">
               <div class="title-line">
                 <strong>${escapeHtml(item.action)}</strong>
@@ -743,9 +929,13 @@
                   <span>round ${escapeHtml(item.round_id ?? "-")}</span>
                 </div>
               </div>
-              <span class="badge">#${escapeHtml(item.id)}</span>
+              <span class="badge ${auditBadgeClass(item)}">#${escapeHtml(item.id)}</span>
             </div>
-            <div class="note">${escapeHtml(item.detail || "-")}</div>
+            <div class="audit-summary">${escapeHtml(summarizeAuditItem(item))}</div>
+            <details class="audit-details">
+              <summary>상세 보기</summary>
+              <div class="note">${escapeHtml(item.detail || "-")}</div>
+            </details>
           </article>
         `).join("")
       );
@@ -753,6 +943,89 @@
 
     function renderError(statusId, message) {
       setStatus(statusId, escapeHtml(message), "error");
+    }
+
+    function closeStageText(stage) {
+      const mapping = {
+        preparing: "마감 준비",
+        "ensuring-audio": "음원 확보",
+        "validating-audio": "음원 확인",
+        "trimming-playlist": "길이 조정",
+        "writing-m3u": "재생목록 생성",
+        "merging-mp3": "합본 생성",
+        finalizing: "결과 저장"
+      };
+      return mapping[stage] || "상태 확인";
+    }
+
+    function renderCloseState(state) {
+      const trigger = document.getElementById("closeButton");
+      const card = document.getElementById("closeProgress");
+      const fill = document.getElementById("closeProgressBar");
+      const badge = document.getElementById("closeStateBadge");
+      const label = document.getElementById("closePhase");
+      const message = document.getElementById("closeStageMessage");
+      const percent = document.getElementById("closeProgressPercent");
+      const round = document.getElementById("closeProgressRound");
+      const status = state?.status || "idle";
+      const progress = Number(state?.progress_percent || 0);
+
+      trigger.disabled = status === "running";
+      card.hidden = status === "idle" && !state?.job_id;
+      fill.style.width = `${Math.max(0, Math.min(100, progress))}%`;
+      badge.textContent = String(status).toUpperCase();
+      badge.className = `badge${status === "failed" ? " danger" : status === "running" ? " warn" : ""}`;
+      label.textContent = closeStageText(state?.stage);
+      message.textContent = state?.message || "월 마감 시작 전입니다.";
+      percent.textContent = `${progress}%`;
+      round.textContent = `대상 월 ${state?.round_id ? `#${state.round_id}` : "-"}`;
+
+      if (status === "running") {
+        setStatus("closeStatus", `${escapeHtml(closeStageText(state?.stage))} 단계 진행 중`, "running");
+      } else if (status === "succeeded") {
+        const result = state?.result || {};
+        setStatus(
+          "closeStatus",
+          `<strong>완료</strong><br />선정 ${escapeHtml(result.selected_count ?? "-")}곡 / 총 ${escapeHtml(result.total_seconds ?? "-")}초`,
+          "success"
+        );
+      } else if (status === "failed") {
+        renderError("closeStatus", state?.error?.message || state?.message || "월 마감에 실패했습니다.");
+      }
+    }
+
+    function stopClosePolling() {
+      if (closePollTimer) {
+        clearInterval(closePollTimer);
+        closePollTimer = null;
+      }
+    }
+
+    async function pollCloseStatus(refreshAfterFinish = false) {
+      if (closePollBusy) return;
+      closePollBusy = true;
+      try {
+        const state = await api("/api/admin/rounds/close-status");
+        renderCloseState(state);
+        if (state.status !== "running") {
+          stopClosePolling();
+          if (refreshAfterFinish && (state.status === "succeeded" || state.status === "failed")) {
+            await Promise.allSettled([loadArtifact(), loadAuditLogs()]);
+          }
+        }
+      } catch (err) {
+        stopClosePolling();
+        renderError("closeStatus", err.message);
+      } finally {
+        closePollBusy = false;
+      }
+    }
+
+    function startClosePolling(refreshAfterFinish = false) {
+      stopClosePolling();
+      closePollTimer = setInterval(() => {
+        pollCloseStatus(refreshAfterFinish);
+      }, 1200);
     }
 
     async function requireAdmin() {
@@ -799,20 +1072,11 @@
     async function manualClose() {
       try {
         const data = await api("/api/admin/rounds/close", "POST", {});
-        const status = escapeHtml(data.status || "unknown");
-        const selected = escapeHtml(data.selected_count ?? "-");
-        const totalSeconds = escapeHtml(data.total_seconds ?? "-");
-        setStatus(
-          "closeStatus",
-          `<strong>${status}</strong><br />선정 ${selected}곡 / 총 ${totalSeconds}초`,
-          "success"
-        );
-        if (data.artifact) {
-          renderArtifact(data.artifact);
-        } else {
-          await loadArtifact();
+        renderCloseState(data);
+        if (data.status === "running") {
+          startClosePolling(true);
+          await pollCloseStatus(true);
         }
-        await loadAuditLogs();
       } catch (err) {
         renderError("closeStatus", err.message);
       }
@@ -877,7 +1141,8 @@
         loadUsers(),
         loadSubmissions(),
         loadArtifact(),
-        loadAuditLogs()
+        loadAuditLogs(),
+        pollCloseStatus(false)
       ]);
     }
 
@@ -885,6 +1150,11 @@
       try {
         await requireAdmin();
         await refreshAll();
+        const closeState = await api("/api/admin/rounds/close-status");
+        renderCloseState(closeState);
+        if (closeState.status === "running") {
+          startClosePolling(true);
+        }
       } catch (err) {
         if (err.message !== "admin-required") {
           renderError("artifactStatus", err.message);

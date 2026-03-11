@@ -4,6 +4,7 @@ import json
 import sys
 import tempfile
 import threading
+import time
 import unittest
 import urllib.error
 import urllib.request
@@ -132,6 +133,18 @@ class AdminApiTest(unittest.TestCase):
         payload = json.loads(raw.decode("utf-8")) if raw else {}
         return status, headers, payload
 
+    def _wait_for_close_status(self, expected_status: str, timeout: float = 3.0) -> dict:
+        deadline = time.time() + timeout
+        last_payload: dict = {}
+        while time.time() < deadline:
+            status, _, payload = self._request_json("/api/admin/rounds/close-status", cookie=self.admin_cookie)
+            self.assertEqual(status, 200)
+            last_payload = payload
+            if payload.get("status") == expected_status:
+                return payload
+            time.sleep(0.05)
+        self.fail(f"close-status did not reach {expected_status}: last={last_payload}")
+
     def test_admin_settings_current_auth_and_persisted_defaults(self) -> None:
         status, _, payload = self._request_json("/api/admin/settings/current")
         self.assertEqual(status, 401)
@@ -156,6 +169,37 @@ class AdminApiTest(unittest.TestCase):
         self.assertEqual(admin_user["display_name"], "관리자")
         self.assertTrue(admin_user["is_admin_approved"])
         self.assertIn("created_at", admin_user)
+
+    def test_admin_page_contains_dedicated_audit_scroll_container(self) -> None:
+        status, headers, raw = self._request("/admin")
+        self.assertEqual(status, 200)
+        self.assertIn("text/html", headers.get("Content-Type", ""))
+        html = raw.decode("utf-8")
+        self.assertIn('class="list audit-list"', html)
+        self.assertIn('id="auditList"', html)
+
+    def test_admin_close_status_reads_persisted_round_state(self) -> None:
+        with self.db.session() as conn:
+            conn.execute(
+                """
+                UPDATE rounds
+                SET status = 'closing',
+                    close_job_key = ?,
+                    close_phase = ?,
+                    close_message = ?,
+                    close_progress = ?,
+                    close_started_at = ?
+                WHERE id = ?
+                """,
+                ("job-persisted", "validating-audio", "음원 유효성 검사 중입니다.", 45, utc_now_iso(), self.round_id),
+            )
+
+        status, _, payload = self._request_json("/api/admin/rounds/close-status", cookie=self.admin_cookie)
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["job_id"], "job-persisted")
+        self.assertEqual(payload["status"], "running")
+        self.assertEqual(payload["stage"], "validating-audio")
+        self.assertEqual(payload["progress_percent"], 45)
 
     def test_admin_submissions_current_returns_hidden_flag(self) -> None:
         status, _, payload = self._request_json("/api/admin/submissions/current", cookie=self.admin_cookie)
@@ -275,7 +319,94 @@ class AdminApiTest(unittest.TestCase):
         self.assertNotIn("mp3_path", payload["artifact"])
         self.assertNotIn("generation_log", payload["artifact"])
 
-    def test_admin_close_round_returns_conflict_for_no_valid_audio(self) -> None:
+    def test_admin_close_round_starts_async_and_reports_success(self) -> None:
+        release = threading.Event()
+        observed = threading.Event()
+
+        def fake_close_round(*args, **kwargs):
+            progress_callback = kwargs.get("progress_callback")
+            if progress_callback:
+                progress_callback("ensuring-audio", "음원을 확보하는 중입니다.", 20)
+            observed.set()
+            release.wait(timeout=2)
+            return {
+                "status": "closed",
+                "round_id": self.round_id,
+                "selected_count": 1,
+                "total_seconds": 120,
+                "m3u_path": str(self.m3u_path),
+                "mp3_path": str(self.mp3_path),
+                "generation_log": "ok",
+            }
+
+        with mock.patch("radio_app.app.close_round", side_effect=fake_close_round):
+            status, _, payload = self._request_json(
+                "/api/admin/rounds/close",
+                method="POST",
+                body={},
+                cookie=self.admin_cookie,
+            )
+            self.assertEqual(status, 202)
+            self.assertEqual(payload["status"], "running")
+            self.assertEqual(payload["round_id"], self.round_id)
+            self.assertTrue(payload["job_id"])
+
+            self.assertTrue(observed.wait(timeout=1))
+            running = self._wait_for_close_status("running")
+            self.assertEqual(running["job_id"], payload["job_id"])
+            self.assertIn(running["stage"], {"preparing", "ensuring-audio"})
+
+            release.set()
+            succeeded = self._wait_for_close_status("succeeded")
+
+        self.assertEqual(succeeded["result"]["selected_count"], 1)
+        self.assertEqual(succeeded["result"]["total_seconds"], 120)
+        with self.db.session() as conn:
+            audit = conn.execute("SELECT action, detail FROM audit_logs WHERE action = 'manual_close' ORDER BY id DESC LIMIT 1").fetchone()
+            self.assertIsNotNone(audit)
+            self.assertIn('"selected_count": 1', audit["detail"])
+
+    def test_admin_close_round_reuses_existing_running_job(self) -> None:
+        release = threading.Event()
+        entered = threading.Event()
+
+        def fake_close_round(*args, **kwargs):
+            entered.set()
+            release.wait(timeout=2)
+            return {
+                "status": "closed",
+                "round_id": self.round_id,
+                "selected_count": 1,
+                "total_seconds": 120,
+                "m3u_path": str(self.m3u_path),
+                "mp3_path": str(self.mp3_path),
+                "generation_log": "ok",
+            }
+
+        with mock.patch("radio_app.app.close_round", side_effect=fake_close_round):
+            status1, _, payload1 = self._request_json(
+                "/api/admin/rounds/close",
+                method="POST",
+                body={},
+                cookie=self.admin_cookie,
+            )
+            self.assertEqual(status1, 202)
+            self.assertTrue(entered.wait(timeout=1))
+
+            status2, _, payload2 = self._request_json(
+                "/api/admin/rounds/close",
+                method="POST",
+                body={},
+                cookie=self.admin_cookie,
+            )
+            self.assertEqual(status2, 202)
+            self.assertEqual(payload1["job_id"], payload2["job_id"])
+            self.assertEqual(payload2["status"], "running")
+
+            release.set()
+            self._wait_for_close_status("succeeded")
+
+    def test_admin_close_round_failure_is_reported_via_status_endpoint(self) -> None:
         with mock.patch("radio_app.app.close_round", side_effect=RuntimeError("no-valid-audio-assets")):
             status, _, payload = self._request_json(
                 "/api/admin/rounds/close",
@@ -283,9 +414,12 @@ class AdminApiTest(unittest.TestCase):
                 body={},
                 cookie=self.admin_cookie,
             )
-        self.assertEqual(status, 409)
-        self.assertEqual(payload["error"], "no-valid-audio-assets")
-        self.assertIn("유효한 음원", payload["message"])
+            self.assertEqual(status, 202)
+            self.assertEqual(payload["status"], "running")
+
+            failed = self._wait_for_close_status("failed")
+        self.assertEqual(failed["error"]["code"], "no-valid-audio-assets")
+        self.assertIn("유효한 음원", failed["error"]["message"])
 
 
     def test_unexpected_errors_are_sanitized_for_get_post_and_put(self) -> None:
