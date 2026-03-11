@@ -19,6 +19,10 @@ class RiroAuthResult:
     riro_id: str | None = None
 
 
+_RIRO_BLOCK_MESSAGE = "리로 인증 서버 접근이 차단되었습니다. VPN/프록시를 끄고 다시 시도하세요."
+_RIRO_TIMEOUT_MESSAGE = "리로 인증 서버 응답이 지연되고 있습니다. 잠시 후 다시 시도하세요."
+
+
 def _strip_tags(value: str) -> str:
     text = re.sub(r"<[^>]+>", "", value or "")
     return html.unescape(text).strip()
@@ -84,6 +88,23 @@ def _extract_profile_from_html(raw_html: str, login_id: str) -> dict | None:
     return None
 
 
+def _looks_like_error_page(raw_text: str) -> bool:
+    normalized = (raw_text or "").lower()
+    return any(
+        marker in normalized
+        for marker in (
+            "<title>에러페이지</title>",
+            "403.jpg",
+            "페이지를 찾을 수 없습니다.",
+            "error_wrap",
+        )
+    )
+
+
+def _is_access_blocked(status_code: int, raw_text: str) -> bool:
+    return status_code == 403 or _looks_like_error_page(raw_text)
+
+
 def check_riro_login(user_id: str, user_pw: str, max_retries: int = 5, sleep_seconds: int = 2) -> RiroAuthResult:
     headers = {
         "Content-Type": "application/x-www-form-urlencoded",
@@ -92,6 +113,8 @@ def check_riro_login(user_id: str, user_pw: str, max_retries: int = 5, sleep_sec
             "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
         ),
     }
+
+    last_message = "인증 서버와 통신 중 오류가 발생했습니다."
 
     for _ in range(max_retries):
         session = requests.Session()
@@ -115,9 +138,13 @@ def check_riro_login(user_id: str, user_pw: str, max_retries: int = 5, sleep_sec
                 },
                 timeout=15,
             )
+            if _is_access_blocked(login_resp.status_code, login_resp.text):
+                return RiroAuthResult(status="error", message=_RIRO_BLOCK_MESSAGE)
             try:
                 login_json = login_resp.json()
             except ValueError:
+                if _looks_like_error_page(login_resp.text):
+                    return RiroAuthResult(status="error", message=_RIRO_BLOCK_MESSAGE)
                 return RiroAuthResult(status="error", message="인증 서버에서 잘못된 응답을 받았습니다.")
 
             code = str(login_json.get("code"))
@@ -138,12 +165,17 @@ def check_riro_login(user_id: str, user_pw: str, max_retries: int = 5, sleep_sec
                 allow_redirects=False,
                 timeout=15,
             )
+            if _is_access_blocked(profile_resp.status_code, profile_resp.text):
+                return RiroAuthResult(status="error", message=_RIRO_BLOCK_MESSAGE)
             profile = _extract_profile_from_html(profile_resp.text, user_id)
             if profile:
                 return RiroAuthResult(status="success", **profile)
+            last_message = "로그인에는 성공했지만 사용자 정보를 확인하지 못했습니다. 잠시 후 다시 시도하세요."
+        except requests.Timeout:
+            last_message = _RIRO_TIMEOUT_MESSAGE
         except requests.RequestException:
-            pass
+            last_message = "인증 서버와 통신 중 오류가 발생했습니다."
 
         time.sleep(sleep_seconds)
 
-    return RiroAuthResult(status="error", message="인증 서버와 통신 중 오류가 발생했습니다.")
+    return RiroAuthResult(status="error", message=last_message)

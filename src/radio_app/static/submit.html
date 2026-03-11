@@ -290,6 +290,12 @@
 
     .login-field:focus { border-color: var(--primary); }
 
+    .login-help {
+      margin: 0;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
     @media (max-width: 780px) {
       .item { grid-template-columns: 50px 1fr auto; }
       .item img { width: 50px; height: 50px; }
@@ -340,6 +346,7 @@
       <h3 id="loginTitle">리로스쿨 로그인</h3>
       <input id="riroId" class="login-field" placeholder="리로스쿨 ID" aria-label="리로스쿨 아이디" />
       <input id="riroPw" class="login-field" type="password" placeholder="리로스쿨 PW" aria-label="리로스쿨 비밀번호" />
+      <p class="muted login-help">로그인이 계속 실패하면 VPN이나 프록시를 끄고 다시 시도하세요.</p>
       <div class="auth-actions">
         <button type="button" class="btn" onclick="login()">로그인</button>
         <button type="button" class="btn light" onclick="closeLoginModal()">닫기</button>
@@ -365,7 +372,7 @@
       "auth-required": "로그인이 필요합니다.",
       "admin-required": "관리자 권한이 필요합니다.",
       "riro_id-and-riro_pw-required": "리로 ID/PW를 입력하세요.",
-      "riro-auth-failed": "리로 로그인에 실패했습니다. ID/PW를 확인하세요.",
+      "riro-auth-failed": "리로 로그인에 실패했습니다. ID/PW 또는 네트워크 상태를 확인하세요.",
       "rate-limit": "요청이 너무 많습니다. 잠시 후 다시 시도하세요.",
       "round-not-open": "현재 월 신청이 열려 있지 않습니다.",
       "submission-limit-reached": "월별 신청은 최대 3곡까지 가능합니다.",
