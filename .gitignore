@@ -6,3 +6,7 @@ artifacts/
 .DS_Store
 
 .worktrees/
+.local/
+.omx/
+docs/plans/
+AGENTS.md

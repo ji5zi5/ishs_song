@@ -62,6 +62,8 @@ class LoginSecurityTest(unittest.TestCase):
     def _request_json(self, path: str, method: str = "GET", body: dict | None = None) -> tuple[int, dict, dict]:
         data = json.dumps(body).encode("utf-8") if body is not None else None
         headers = {"Content-Type": "application/json"} if body is not None else {}
+        if method.upper() in {"POST", "PUT"}:
+            headers["Origin"] = self.base_url
         request = urllib.request.Request(f"{self.base_url}{path}", data=data, headers=headers, method=method)
         try:
             with urllib.request.urlopen(request, timeout=5) as response:

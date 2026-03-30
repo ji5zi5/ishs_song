@@ -44,8 +44,27 @@ def validate_media_toolchain(cfg: AppConfig) -> tuple[Path, Path]:
     return ffmpeg, ffprobe
 
 
+def _is_loopback_host(host: str) -> bool:
+    normalized = str(host or "").strip().lower()
+    return normalized in {"127.0.0.1", "::1", "localhost"}
+
+
+def validate_runtime_security(cfg: AppConfig) -> None:
+    if cfg.riro_auth_mode.strip().lower() != "mock":
+        return
+    if cfg.allow_nonlocal_mock_auth:
+        return
+    if _is_loopback_host(cfg.host):
+        return
+    raise RuntimeError(
+        "RIRO_AUTH_MODE=mock is only allowed on loopback hosts. "
+        "Use RADIO_ALLOW_NONLOCAL_MOCK_AUTH=1 only for explicit local testing."
+    )
+
+
 def main() -> None:
     cfg = AppConfig()
+    validate_runtime_security(cfg)
     ffmpeg_path, _ffprobe_path = validate_media_toolchain(cfg)
     cfg = replace(cfg, ffmpeg_path=str(ffmpeg_path))
     ensure_directories(cfg)

@@ -21,6 +21,7 @@ class AppConfig:
     timezone: str = os.getenv("RADIO_TIMEZONE", "Asia/Seoul")
     search_country: str = os.getenv("RADIO_SEARCH_COUNTRY", "KR")
     riro_auth_mode: str = os.getenv("RIRO_AUTH_MODE", "riro")
+    allow_nonlocal_mock_auth: bool = os.getenv("RADIO_ALLOW_NONLOCAL_MOCK_AUTH", "0").lower() in ("1", "true", "yes")
     ffmpeg_path: str | None = os.getenv("RADIO_FFMPEG_PATH")
     scheduler_interval_seconds: int = int(os.getenv("RADIO_SCHEDULER_INTERVAL_SECONDS", "30"))
     file_retention_seconds: int = int(os.getenv("RADIO_FILE_RETENTION_SECONDS", "86400"))

@@ -1308,16 +1308,18 @@ class RadioHTTPRequestHandler(BaseHTTPRequestHandler):
     def _has_valid_same_origin_headers(self) -> bool:
         host = str(self.headers.get("Host", "")).strip().lower()
         if not host:
-            return True
+            return False
+        found_header = False
         for header_name in ("Origin", "Referer"):
             raw_value = str(self.headers.get(header_name, "")).strip()
             if not raw_value:
                 continue
+            found_header = True
             parsed = urlparse(raw_value)
             if parsed.scheme not in {"http", "https"}:
                 return False
             return str(parsed.netloc or "").strip().lower() == host
-        return True
+        return found_header
 
     def _login_rate_limit_key(self, login_id: str) -> str:
         normalized_login = str(login_id or "").strip().lower() or "-"

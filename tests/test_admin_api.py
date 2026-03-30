@@ -143,6 +143,9 @@ class AdminApiTest(unittest.TestCase):
             headers["Content-Type"] = "application/json"
         if cookie:
             headers["Cookie"] = cookie
+        has_origin_override = bool(extra_headers and ("Origin" in extra_headers or "Referer" in extra_headers))
+        if method.upper() in {"POST", "PUT"} and not has_origin_override:
+            headers.setdefault("Origin", self.base_url)
         if extra_headers:
             headers.update(extra_headers)
         request = urllib.request.Request(f"{self.base_url}{path}", data=data, headers=headers, method=method)
@@ -688,6 +691,17 @@ class AdminApiTest(unittest.TestCase):
         )
         self.assertEqual(status, 200)
         self.assertTrue(payload["ok"])
+
+    def test_state_changing_requests_reject_missing_origin_and_referer(self) -> None:
+        status, _, payload = self._request_json(
+            "/api/auth/logout",
+            method="POST",
+            body={},
+            cookie=self.member_cookie,
+            extra_headers={"Origin": "", "Referer": ""},
+        )
+        self.assertEqual(status, 403)
+        self.assertEqual(payload["error"], "invalid-origin")
 
     def test_admin_close_round_starts_async_and_reports_success(self) -> None:
         release = threading.Event()
