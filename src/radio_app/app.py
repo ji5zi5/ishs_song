@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import importlib.metadata
 import json
 import logging
+import secrets
 import sqlite3
+import subprocess
+import sys
 import threading
 import uuid
 from dataclasses import dataclass
@@ -12,23 +16,30 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, urlparse
+from urllib.request import urlopen
 
 from radio_app.auth import authenticate_session, create_or_update_user, issue_session, revoke_session
 from radio_app.config import AppConfig
 from radio_app.db import DB, utc_now_iso
+from radio_app.services.audio import validate_mp3_and_get_duration_seconds
 from radio_app.services.rounds import (
+    check_keyed_rate_limit,
+    clear_keyed_rate_events,
     close_round,
     current_defaults,
     enforce_rate_limit,
     ensure_open_round,
+    format_round_label,
     get_round_result,
     get_setting,
     ranked_submissions,
+    record_keyed_rate_event,
     select_round_for_admin_close,
     set_setting,
 )
 from radio_app.services.riro import check_riro_login
 from radio_app.services.music_search import ITunesSearchClient, SongSearchError
+from radio_app.services.youtube import download_youtube_url
 
 
 @dataclass
@@ -39,7 +50,6 @@ class AppContext:
 
 
 LOGGER = logging.getLogger(__name__)
-
 
 class RadioHTTPRequestHandler(BaseHTTPRequestHandler):
     ctx: AppContext
@@ -79,10 +89,18 @@ class RadioHTTPRequestHandler(BaseHTTPRequestHandler):
                 return self._handle_admin_current_submissions()
             if path == "/api/admin/audit-logs":
                 return self._handle_admin_audit_logs()
+            if path == "/api/admin/maintenance/yt-dlp":
+                return self._handle_admin_yt_dlp_status()
+            if path == "/api/admin/manual-downloads":
+                return self._handle_admin_manual_downloads()
+            if path == "/api/admin/manual-downloads/download":
+                return self._handle_admin_manual_download_download()
             if path == "/api/admin/artifacts/latest":
                 return self._handle_admin_latest_artifact()
             if path == "/api/admin/artifacts/download":
                 return self._handle_admin_artifact_download()
+            if path == "/api/admin/artifacts/download-track":
+                return self._handle_admin_artifact_track_download()
             if path == "/api/admin/rounds/close-status":
                 return self._handle_admin_close_status()
             self._send_json({"error": "not-found"}, status=HTTPStatus.NOT_FOUND)
@@ -92,6 +110,8 @@ class RadioHTTPRequestHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         path = urlparse(self.path).path
         try:
+            if not self._enforce_same_origin():
+                return
             if path == "/api/auth/login":
                 return self._handle_login()
             if path == "/api/auth/logout":
@@ -108,6 +128,10 @@ class RadioHTTPRequestHandler(BaseHTTPRequestHandler):
                 return self._handle_admin_settings()
             if path == "/api/admin/submissions/hide":
                 return self._handle_admin_hide_submission()
+            if path == "/api/admin/maintenance/yt-dlp/update":
+                return self._handle_admin_yt_dlp_update()
+            if path == "/api/admin/manual-downloads/youtube":
+                return self._handle_admin_manual_youtube_download()
             self._send_json({"error": "not-found"}, status=HTTPStatus.NOT_FOUND)
         except Exception as exc:
             self._handle_unexpected_error(exc)
@@ -115,6 +139,8 @@ class RadioHTTPRequestHandler(BaseHTTPRequestHandler):
     def do_PUT(self) -> None:  # noqa: N802
         path = urlparse(self.path).path
         try:
+            if not self._enforce_same_origin():
+                return
             if path == "/api/votes":
                 return self._handle_votes_replace()
             self._send_json({"error": "not-found"}, status=HTTPStatus.NOT_FOUND)
@@ -133,6 +159,7 @@ class RadioHTTPRequestHandler(BaseHTTPRequestHandler):
                         "riro_user_key": user.riro_user_key,
                         "display_name": user.display_name,
                         "is_admin_approved": user.is_admin_approved,
+                        "is_super_admin": self._is_super_admin_user(user),
                     }
                 }
             )
@@ -152,8 +179,14 @@ class RadioHTTPRequestHandler(BaseHTTPRequestHandler):
             if not riro_id or not riro_pw:
                 return self._send_json({"error": "riro_id-and-riro_pw-required"}, status=HTTPStatus.BAD_REQUEST)
 
+            with self.ctx.db.session() as conn:
+                if self._is_login_rate_limited(conn, riro_id):
+                    return self._send_json({"error": "rate-limit"}, status=HTTPStatus.TOO_MANY_REQUESTS)
+
             result = check_riro_login(riro_id, riro_pw)
             if result.status != "success":
+                with self.ctx.db.session() as conn:
+                    self._record_failed_login_attempt(conn, riro_id)
                 return self._send_json(
                     {"error": "riro-auth-failed", "message": result.message or "인증 실패"},
                     status=HTTPStatus.UNAUTHORIZED,
@@ -166,6 +199,8 @@ class RadioHTTPRequestHandler(BaseHTTPRequestHandler):
             display_name = (result.name or "").strip() or riro_user_key
 
         with self.ctx.db.session() as conn:
+            if mode != "mock":
+                self._clear_failed_login_attempts(conn, riro_id)
             user = create_or_update_user(conn, riro_user_key=riro_user_key, display_name=display_name)
             token = issue_session(conn, user.id, ttl_hours=self.ctx.cfg.session_ttl_hours)
             headers = {"Set-Cookie": self._build_session_cookie(token, max_age=self.ctx.cfg.session_ttl_hours * 3600)}
@@ -220,12 +255,13 @@ class RadioHTTPRequestHandler(BaseHTTPRequestHandler):
 
     def _handle_submit_song(self) -> None:
         body = self._read_json_body()
-        track_id = str(body.get("track_id", body.get("spotify_track_id", ""))).strip()
-        title = str(body.get("title", "")).strip()
-        artist = str(body.get("artist", "")).strip()
-        album_art_url = str(body.get("album_art_url", "")).strip()
-        external_url = str(body.get("external_url", "")).strip()
-        if not track_id or not title or not artist:
+        try:
+            track_id = self._validated_text(body.get("track_id", body.get("spotify_track_id", "")), max_length=255)
+            title = self._validated_text(body.get("title", ""), max_length=255)
+            artist = self._validated_text(body.get("artist", ""), max_length=255)
+            album_art_url = self._validated_optional_url(body.get("album_art_url", ""))
+            external_url = self._validated_optional_url(body.get("external_url", ""))
+        except ValueError:
             return self._send_json({"error": "invalid-song-payload"}, status=HTTPStatus.BAD_REQUEST)
 
         with self.ctx.db.session() as conn:
@@ -327,16 +363,21 @@ class RadioHTTPRequestHandler(BaseHTTPRequestHandler):
     def _handle_public_current_round(self) -> None:
         with self.ctx.db.session() as conn:
             round_row = ensure_open_round(conn, self.ctx.cfg.timezone)
-            self._send_json({"round": dict(round_row)})
+            self._send_json({"round": self._round_payload(conn, round_row)})
 
     def _handle_public_songs(self) -> None:
+        params = self._query_params()
+        sort_by = params.get("sort", "popular")
+        if sort_by not in {"popular", "recent"}:
+            return self._send_json({"error": "invalid-song-sort"}, status=HTTPStatus.BAD_REQUEST)
         with self.ctx.db.session() as conn:
             round_row = ensure_open_round(conn, self.ctx.cfg.timezone)
-            items = ranked_submissions(conn, int(round_row["id"]))
+            items = ranked_submissions(conn, int(round_row["id"]), sort_by=sort_by)
             self._send_json(
                 {
                     "round_id": int(round_row["id"]),
-                    "round": dict(round_row),
+                    "round": self._round_payload(conn, round_row),
+                    "sort": sort_by,
                     "items": [dict(i) for i in items],
                 }
             )
@@ -354,6 +395,7 @@ class RadioHTTPRequestHandler(BaseHTTPRequestHandler):
                 current = ensure_open_round(conn, self.ctx.cfg.timezone)
                 round_id = int(current["id"])
             result = get_round_result(conn, round_id)
+            result["round"] = self._round_payload(conn, result["round"])
             self._send_json(result)
 
     def _handle_admin_current_settings(self) -> None:
@@ -393,6 +435,7 @@ class RadioHTTPRequestHandler(BaseHTTPRequestHandler):
                             "riro_user_key": row["riro_user_key"],
                             "display_name": row["display_name"],
                             "is_admin_approved": bool(row["is_admin_approved"]),
+                            "is_super_admin": self._is_super_admin_key(str(row["riro_user_key"])),
                             "created_at": row["created_at"],
                         }
                         for row in rows
@@ -488,6 +531,195 @@ class RadioHTTPRequestHandler(BaseHTTPRequestHandler):
                 }
             )
 
+    def _handle_admin_yt_dlp_status(self) -> None:
+        with self.ctx.db.session() as conn:
+            user = self._require_auth(conn, required=True, admin=True)
+            if not user:
+                return
+            self._send_json(self._yt_dlp_status_payload())
+
+    def _handle_admin_yt_dlp_update(self) -> None:
+        with self.ctx.db.session() as conn:
+            user = self._require_auth(conn, required=True, admin=True)
+            if not user:
+                return
+
+            before_version = self._yt_dlp_version()
+            cmd = [sys.executable, "-m", "pip", "install", "-U", "yt-dlp"]
+            try:
+                proc = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=180,
+                )
+            except subprocess.TimeoutExpired:
+                detail = {"before_version": before_version, "error": "timeout"}
+                self._insert_audit_log(conn, action="yt_dlp_update_failed", detail=detail, actor_user_id=user.id)
+                conn.commit()
+                return self._send_json(
+                    {
+                        "error": "yt-dlp-update-failed",
+                        "message": "yt-dlp 업데이트가 제한 시간을 초과했습니다.",
+                    },
+                    status=HTTPStatus.INTERNAL_SERVER_ERROR,
+                )
+
+            summary = self._summarize_command_output(proc.stdout, proc.stderr)
+            if proc.returncode != 0:
+                detail = {
+                    "before_version": before_version,
+                    "returncode": proc.returncode,
+                    "summary": summary,
+                }
+                self._insert_audit_log(conn, action="yt_dlp_update_failed", detail=detail, actor_user_id=user.id)
+                conn.commit()
+                return self._send_json(
+                    {
+                        "error": "yt-dlp-update-failed",
+                        "message": "yt-dlp 업데이트에 실패했습니다.",
+                        "summary": summary,
+                    },
+                    status=HTTPStatus.INTERNAL_SERVER_ERROR,
+                )
+
+            self._clear_loaded_module("yt_dlp")
+            after_version = self._yt_dlp_version()
+            payload = {
+                "ok": True,
+                "before_version": before_version,
+                "after_version": after_version,
+                "summary": summary,
+                "changed": before_version != after_version,
+            }
+            self._insert_audit_log(conn, action="yt_dlp_updated", detail=payload, actor_user_id=user.id)
+            conn.commit()
+            self._send_json(payload)
+
+    def _handle_admin_manual_downloads(self) -> None:
+        with self.ctx.db.session() as conn:
+            user = self._require_auth(conn, required=True, admin=True)
+            if not user:
+                return
+            rows = conn.execute(
+                """
+                SELECT id, source_url, video_id, title, uploader, duration_seconds, created_at
+                FROM manual_downloads
+                ORDER BY id DESC
+                LIMIT 10
+                """
+            ).fetchall()
+            self._send_json(
+                {
+                    "items": [
+                        {
+                            "id": int(row["id"]),
+                            "source_url": str(row["source_url"]),
+                            "video_id": str(row["video_id"]),
+                            "title": str(row["title"]),
+                            "uploader": str(row["uploader"]),
+                            "duration_seconds": int(row["duration_seconds"] or 0),
+                            "created_at": str(row["created_at"]),
+                            "download_url": f"/api/admin/manual-downloads/download?id={int(row['id'])}",
+                        }
+                        for row in rows
+                    ]
+                }
+            )
+
+    def _handle_admin_manual_youtube_download(self) -> None:
+        body = self._read_json_body()
+        try:
+            source_url = self._validated_youtube_url(body.get("url", ""))
+        except ValueError:
+            return self._send_json({"error": "invalid-youtube-url"}, status=HTTPStatus.BAD_REQUEST)
+
+        with self.ctx.db.session() as conn:
+            user = self._require_auth(conn, required=True, admin=True)
+            if not user:
+                return
+            try:
+                download = download_youtube_url(
+                    source_url,
+                    self.ctx.cfg.uploads_dir / "manual",
+                    ffmpeg_path=self.ctx.cfg.ffmpeg_path,
+                )
+                duration_seconds, validation_error = validate_mp3_and_get_duration_seconds(download.path)
+                if validation_error or duration_seconds <= 0:
+                    raise RuntimeError(validation_error or "unable-to-parse-mp3-duration")
+            except Exception as exc:
+                detail = {"source_url": source_url, "error": str(exc) or repr(exc)}
+                self._insert_audit_log(conn, action="manual_youtube_download_failed", detail=detail, actor_user_id=user.id)
+                conn.commit()
+                return self._send_json(
+                    {"error": "manual-youtube-download-failed", "message": str(exc) or "download-failed"},
+                    status=HTTPStatus.INTERNAL_SERVER_ERROR,
+                )
+
+            conn.execute(
+                """
+                INSERT INTO manual_downloads(actor_user_id, source_url, video_id, title, uploader, file_path, duration_seconds, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    user.id,
+                    source_url,
+                    str(download.candidate.video_id or ""),
+                    str(download.candidate.title or download.path.stem),
+                    str(download.candidate.uploader or ""),
+                    str(download.path),
+                    duration_seconds,
+                    utc_now_iso(),
+                ),
+            )
+            manual_id = int(conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"])
+            payload = {
+                "ok": True,
+                "download": {
+                    "id": manual_id,
+                    "source_url": source_url,
+                    "video_id": str(download.candidate.video_id or ""),
+                    "title": str(download.candidate.title or download.path.stem),
+                    "uploader": str(download.candidate.uploader or ""),
+                    "duration_seconds": duration_seconds,
+                    "created_at": utc_now_iso(),
+                    "download_url": f"/api/admin/manual-downloads/download?id={manual_id}",
+                },
+            }
+            self._insert_audit_log(conn, action="manual_youtube_download", detail=payload["download"], actor_user_id=user.id)
+            conn.commit()
+            self._send_json(payload)
+
+    def _handle_admin_manual_download_download(self) -> None:
+        with self.ctx.db.session() as conn:
+            user = self._require_auth(conn, required=True, admin=True)
+            if not user:
+                return
+            params = self._query_params()
+            raw_id = params.get("id")
+            if raw_id is None:
+                return self._send_json({"error": "invalid-manual-download-request"}, status=HTTPStatus.BAD_REQUEST)
+            try:
+                manual_id = int(raw_id)
+            except ValueError:
+                return self._send_json({"error": "invalid-manual-download-request"}, status=HTTPStatus.BAD_REQUEST)
+            row = conn.execute(
+                """
+                SELECT id, title, uploader, file_path, created_at
+                FROM manual_downloads
+                WHERE id = ?
+                """,
+                (manual_id,),
+            ).fetchone()
+            if row is None:
+                return self._send_json({"error": "manual-download-not-found", "id": manual_id}, status=HTTPStatus.NOT_FOUND)
+            file_path = self._manual_download_file_path(row)
+            if file_path is None or not file_path.exists():
+                return self._send_json({"error": "manual-download-file-missing", "id": manual_id}, status=HTTPStatus.NOT_FOUND)
+            download_name = f"manual-{row['uploader']}-{row['title']}.mp3"
+            self._send_file(file_path, "audio/mpeg", download_name)
+
     def _handle_admin_latest_artifact(self) -> None:
         with self.ctx.db.session() as conn:
             user = self._require_auth(conn, required=True, admin=True)
@@ -502,7 +734,7 @@ class RadioHTTPRequestHandler(BaseHTTPRequestHandler):
                 LIMIT 1
                 """
             ).fetchone()
-            self._send_json({"artifact": self._artifact_summary_payload(row) if row else None})
+            self._send_json({"artifact": self._artifact_summary_payload(conn, row) if row else None})
 
     def _handle_admin_artifact_download(self) -> None:
         with self.ctx.db.session() as conn:
@@ -522,7 +754,7 @@ class RadioHTTPRequestHandler(BaseHTTPRequestHandler):
                 return self._send_json({"error": "invalid-artifact-download-request"}, status=HTTPStatus.BAD_REQUEST)
             row = conn.execute(
                 """
-                SELECT ra.*, r.start_at
+                SELECT ra.*, r.cadence, r.start_at, r.end_at
                 FROM round_artifacts ra
                 JOIN rounds r ON r.id = ra.round_id
                 WHERE ra.id = ?
@@ -540,10 +772,52 @@ class RadioHTTPRequestHandler(BaseHTTPRequestHandler):
                     {"error": "artifact-file-missing", "artifact_id": artifact_id_int, "type": artifact_type},
                     status=HTTPStatus.NOT_FOUND,
                 )
-            round_month = self._month_label(row["start_at"])
-            download_name = f"{round_month}-playlist.{artifact_type}" if round_month else f"playlist.{artifact_type}"
+            round_label = format_round_label(conn, row, self.ctx.cfg.timezone)
+            label_prefix = round_label.replace(" ", "-") if round_label and round_label != "-" else ""
+            download_name = f"{label_prefix}-playlist.{artifact_type}" if label_prefix else f"playlist.{artifact_type}"
             content_type = "audio/mpeg" if artifact_type == "mp3" else "audio/x-mpegurl; charset=utf-8"
             self._send_file(file_path, content_type, download_name)
+
+    def _handle_admin_artifact_track_download(self) -> None:
+        with self.ctx.db.session() as conn:
+            user = self._require_auth(conn, required=True, admin=True)
+            if not user:
+                return
+            params = self._query_params()
+            artifact_id = params.get("artifact_id")
+            track_id = params.get("track_id")
+            if artifact_id is None or track_id is None:
+                return self._send_json({"error": "invalid-artifact-download-request"}, status=HTTPStatus.BAD_REQUEST)
+            try:
+                artifact_id_int = int(artifact_id)
+                track_id_int = int(track_id)
+            except ValueError:
+                return self._send_json({"error": "invalid-artifact-download-request"}, status=HTTPStatus.BAD_REQUEST)
+            row = conn.execute(
+                """
+                SELECT rat.*, ra.id AS artifact_id, r.cadence, r.start_at, r.end_at
+                FROM round_artifact_tracks rat
+                JOIN round_artifacts ra ON ra.id = rat.artifact_id
+                JOIN rounds r ON r.id = ra.round_id
+                WHERE rat.artifact_id = ? AND rat.track_order = ?
+                """,
+                (artifact_id_int, track_id_int),
+            ).fetchone()
+            if row is None:
+                return self._send_json(
+                    {"error": "artifact-track-not-found", "artifact_id": artifact_id_int, "track_id": track_id_int},
+                    status=HTTPStatus.NOT_FOUND,
+                )
+            file_path = self._artifact_track_file_path(row)
+            if file_path is None or not file_path.exists():
+                return self._send_json(
+                    {"error": "artifact-file-missing", "artifact_id": artifact_id_int, "track_id": track_id_int},
+                    status=HTTPStatus.NOT_FOUND,
+                )
+            round_label = format_round_label(conn, row, self.ctx.cfg.timezone)
+            label_prefix = round_label.replace(" ", "-") if round_label and round_label != "-" else "playlist"
+            download_name = f"{label_prefix}-{int(row['track_order']):02d}-{row['artist']}-{row['title']}.mp3"
+            self._send_file(file_path, "audio/mpeg", download_name)
 
     def _handle_admin_close_status(self) -> None:
         with self.ctx.db.session() as conn:
@@ -625,7 +899,7 @@ class RadioHTTPRequestHandler(BaseHTTPRequestHandler):
                     for key, value in result.items()
                     if key not in {"m3u_path", "mp3_path", "generation_log", "artifact"}
                 }
-                response_payload["artifact"] = self._artifact_summary_payload(summary_row) if summary_row else None
+                response_payload["artifact"] = self._artifact_summary_payload(conn, summary_row) if summary_row else None
                 self._insert_audit_log(
                     conn,
                     action="manual_close",
@@ -650,7 +924,7 @@ class RadioHTTPRequestHandler(BaseHTTPRequestHandler):
                     round_id,
                     job_id,
                     error_code="close-job-failed",
-                    message="월 마감 중 오류가 발생했습니다.",
+                    message="회차 마감 중 오류가 발생했습니다.",
                 )
             except Exception:
                 LOGGER.exception("Manual close job failed", extra={"round_id": round_id, "job_id": job_id})
@@ -659,7 +933,7 @@ class RadioHTTPRequestHandler(BaseHTTPRequestHandler):
                     round_id,
                     job_id,
                     error_code="close-job-failed",
-                    message="월 마감 중 오류가 발생했습니다.",
+                    message="회차 마감 중 오류가 발생했습니다.",
                 )
 
     def _select_active_close_round(self, conn: sqlite3.Connection) -> sqlite3.Row | None:
@@ -721,7 +995,7 @@ class RadioHTTPRequestHandler(BaseHTTPRequestHandler):
                 close_error = NULL
             WHERE id = ? AND close_job_key = ?
             """,
-            ("월 마감이 완료되었습니다.", utc_now_iso(), round_id, job_id),
+            ("회차 마감이 완료되었습니다.", utc_now_iso(), round_id, job_id),
         )
 
     def _mark_close_failed(
@@ -827,7 +1101,7 @@ class RadioHTTPRequestHandler(BaseHTTPRequestHandler):
                 pass
         payload.setdefault("round_id", round_id)
         if summary_row is not None:
-            artifact = self._artifact_summary_payload(summary_row)
+            artifact = self._artifact_summary_payload(conn, summary_row)
             payload.setdefault("total_seconds", int(summary_row["total_seconds"]))
             payload["artifact"] = artifact
         return payload or None
@@ -840,24 +1114,24 @@ class RadioHTTPRequestHandler(BaseHTTPRequestHandler):
                 return parsed
         except json.JSONDecodeError:
             pass
-        return {"code": "close-job-failed", "message": fallback_message or "월 마감 중 오류가 발생했습니다."}
+        return {"code": "close-job-failed", "message": fallback_message or "회차 마감 중 오류가 발생했습니다."}
 
     def _handle_admin_settings(self) -> None:
         body = self._read_json_body()
         cadence = str(body.get("cadence", "")).strip()
-        playlist_size = int(body.get("playlist_size", 12))
         target_seconds = int(body.get("target_seconds", 2400))
         loudnorm_enabled = bool(body.get("loudnorm_enabled", True))
         if cadence not in {"weekly", "monthly"}:
             return self._send_json({"error": "cadence-must-be-weekly-or-monthly"}, status=HTTPStatus.BAD_REQUEST)
-        if playlist_size < 1 or playlist_size > 100:
-            return self._send_json({"error": "invalid-playlist-size"}, status=HTTPStatus.BAD_REQUEST)
         if target_seconds < 60 or target_seconds > 10800:
             return self._send_json({"error": "invalid-target-seconds"}, status=HTTPStatus.BAD_REQUEST)
         with self.ctx.db.session() as conn:
             user = self._require_auth(conn, required=True, admin=True)
             if not user:
                 return
+            playlist_size = int(body.get("playlist_size", get_setting(conn, "default_playlist_size", "12")))
+            if playlist_size < 1 or playlist_size > 100:
+                return self._send_json({"error": "invalid-playlist-size"}, status=HTTPStatus.BAD_REQUEST)
             set_setting(conn, "round_default_cadence", cadence)
             set_setting(conn, "default_playlist_size", str(playlist_size))
             set_setting(conn, "default_target_seconds", str(target_seconds))
@@ -893,11 +1167,15 @@ class RadioHTTPRequestHandler(BaseHTTPRequestHandler):
             if not user:
                 return
             row = conn.execute(
-                "SELECT id, is_admin_approved FROM users WHERE id = ?",
+                "SELECT id, is_admin_approved, riro_user_key FROM users WHERE id = ?",
                 (target,),
             ).fetchone()
             if row is None:
                 return self._send_json({"error": "user-not-found", "user_id": target}, status=HTTPStatus.NOT_FOUND)
+            if not approved and not self._is_super_admin_user(user):
+                return self._send_json({"error": "super-admin-required"}, status=HTTPStatus.FORBIDDEN)
+            if not approved and self._is_super_admin_key(str(row["riro_user_key"])):
+                return self._send_json({"error": "super-admin-protected"}, status=HTTPStatus.FORBIDDEN)
             if bool(row["is_admin_approved"]) == approved:
                 return self._send_json(
                     {"error": "admin-state-unchanged", "user_id": target, "approved": approved},
@@ -910,6 +1188,7 @@ class RadioHTTPRequestHandler(BaseHTTPRequestHandler):
                 detail={"user_id": target, "approved": approved},
                 actor_user_id=user.id,
             )
+            conn.commit()
             self._send_json({"ok": True, "user_id": target, "approved": approved})
 
     def _handle_admin_hide_submission(self) -> None:
@@ -928,10 +1207,20 @@ class RadioHTTPRequestHandler(BaseHTTPRequestHandler):
         if not str(path).startswith(str(root.resolve())) or not path.exists():
             return self._send_json({"error": "not-found"}, status=HTTPStatus.NOT_FOUND)
         try:
+            nonce: str | None = None
+            data: bytes
+            if content_type.startswith("text/html"):
+                nonce = secrets.token_urlsafe(16)
+                html = path.read_text(encoding="utf-8").replace("__CSP_NONCE__", nonce)
+                data = html.encode("utf-8")
+            else:
+                data = path.read_bytes()
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", content_type)
+            for k, v in self._security_headers(script_nonce=nonce).items():
+                self.send_header(k, v)
             self.end_headers()
-            self.wfile.write(path.read_bytes())
+            self.wfile.write(data)
         except OSError as exc:
             if self._is_client_disconnect(exc):
                 return
@@ -958,6 +1247,8 @@ class RadioHTTPRequestHandler(BaseHTTPRequestHandler):
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(data)))
+            for k, v in self._security_headers().items():
+                self.send_header(k, v)
             if headers:
                 for k, v in headers.items():
                     self.send_header(k, v)
@@ -976,6 +1267,8 @@ class RadioHTTPRequestHandler(BaseHTTPRequestHandler):
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(data)))
+            for k, v in self._security_headers().items():
+                self.send_header(k, v)
             self.send_header(
                 "Content-Disposition",
                 f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{encoded_name}',
@@ -1006,6 +1299,113 @@ class RadioHTTPRequestHandler(BaseHTTPRequestHandler):
         params = parse_qs(parsed.query, keep_blank_values=True)
         return {key: values[-1] for key, values in params.items()}
 
+    def _enforce_same_origin(self) -> bool:
+        if self._has_valid_same_origin_headers():
+            return True
+        self._send_json({"error": "invalid-origin"}, status=HTTPStatus.FORBIDDEN)
+        return False
+
+    def _has_valid_same_origin_headers(self) -> bool:
+        host = str(self.headers.get("Host", "")).strip().lower()
+        if not host:
+            return True
+        for header_name in ("Origin", "Referer"):
+            raw_value = str(self.headers.get(header_name, "")).strip()
+            if not raw_value:
+                continue
+            parsed = urlparse(raw_value)
+            if parsed.scheme not in {"http", "https"}:
+                return False
+            return str(parsed.netloc or "").strip().lower() == host
+        return True
+
+    def _login_rate_limit_key(self, login_id: str) -> str:
+        normalized_login = str(login_id or "").strip().lower() or "-"
+        return f"login-user:{normalized_login}"
+
+    def _is_login_rate_limited(self, conn: sqlite3.Connection, login_id: str) -> bool:
+        user_key = self._login_rate_limit_key(login_id)
+        cfg = self.ctx.cfg
+        return not check_keyed_rate_limit(
+            conn,
+            user_key,
+            "login-failure-user",
+            cfg.login_failure_limit_per_user,
+            cfg.login_failure_window_seconds,
+        )
+
+    def _record_failed_login_attempt(self, conn: sqlite3.Connection, login_id: str) -> None:
+        user_key = self._login_rate_limit_key(login_id)
+        window_seconds = self.ctx.cfg.login_failure_window_seconds
+        record_keyed_rate_event(conn, user_key, "login-failure-user", window_seconds)
+
+    def _clear_failed_login_attempts(self, conn: sqlite3.Connection, login_id: str) -> None:
+        user_key = self._login_rate_limit_key(login_id)
+        clear_keyed_rate_events(conn, user_key, "login-failure-user")
+
+    @staticmethod
+    def _validated_text(value: object, *, max_length: int) -> str:
+        text = str(value or "").strip()
+        if not text or len(text) > max_length:
+            raise ValueError("invalid-text")
+        if any(ch in text for ch in ("\x00", "\r", "\n")):
+            raise ValueError("invalid-text")
+        return text
+
+    @staticmethod
+    def _validated_optional_url(value: object, *, max_length: int = 2048) -> str:
+        raw = str(value or "").strip()
+        if not raw:
+            return ""
+        if len(raw) > max_length:
+            raise ValueError("invalid-url")
+        parsed = urlparse(raw)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("invalid-url")
+        return raw
+
+    @staticmethod
+    def _validated_youtube_url(value: object, *, max_length: int = 2048) -> str:
+        raw = str(value or "").strip()
+        if not raw or len(raw) > max_length:
+            raise ValueError("invalid-youtube-url")
+        parsed = urlparse(raw)
+        host = str(parsed.netloc or "").strip().lower()
+        if parsed.scheme not in {"http", "https"} or not host:
+            raise ValueError("invalid-youtube-url")
+        if host == "youtu.be":
+            if not str(parsed.path or "").strip("/"):
+                raise ValueError("invalid-youtube-url")
+            return raw
+        if host == "youtube.com" or host.endswith(".youtube.com"):
+            return raw
+        raise ValueError("invalid-youtube-url")
+
+    @staticmethod
+    def _csp_header(script_nonce: str | None = None) -> str:
+        script_src = "script-src 'self'"
+        if script_nonce:
+            script_src += f" 'nonce-{script_nonce}'"
+        return (
+            "default-src 'self'; "
+            "img-src 'self' https: data:; "
+            "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+            "font-src 'self' https://cdn.jsdelivr.net data:; "
+            f"{script_src}; "
+            "object-src 'none'; "
+            "base-uri 'self'; "
+            "frame-ancestors 'none'"
+        )
+
+    @classmethod
+    def _security_headers(cls, script_nonce: str | None = None) -> dict[str, str]:
+        return {
+            "Content-Security-Policy": cls._csp_header(script_nonce),
+            "Referrer-Policy": "same-origin",
+            "X-Content-Type-Options": "nosniff",
+            "X-Frame-Options": "DENY",
+        }
+
     def _build_session_cookie(self, token: str, max_age: int) -> str:
         parts = [f"session={token}", "Path=/", "HttpOnly", "SameSite=Lax", f"Max-Age={max_age}"]
         if self.ctx.cfg.session_cookie_secure:
@@ -1026,11 +1426,33 @@ class RadioHTTPRequestHandler(BaseHTTPRequestHandler):
             (round_id, actor_user_id, action, serialized, utc_now_iso()),
         )
 
-    def _artifact_summary_payload(self, row: sqlite3.Row | None) -> dict[str, Any] | None:
+    def _is_super_admin_key(self, riro_user_key: str) -> bool:
+        return riro_user_key in self.ctx.cfg.super_admin_ids
+
+    def _is_super_admin_user(self, user: Any) -> bool:
+        return self._is_super_admin_key(str(user.riro_user_key))
+
+    def _round_payload(self, conn: sqlite3.Connection, row: sqlite3.Row | dict[str, Any] | None) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        payload = dict(row)
+        payload["round_label"] = format_round_label(conn, payload, self.ctx.cfg.timezone)
+        return payload
+
+    def _artifact_summary_payload(self, conn: sqlite3.Connection, row: sqlite3.Row | None) -> dict[str, Any] | None:
         if row is None:
             return None
         m3u_path = self._artifact_file_path(row, "m3u")
         mp3_path = self._artifact_file_path(row, "mp3")
+        tracks = conn.execute(
+            """
+            SELECT track_order, submission_id, song_id, title, artist, duration_seconds
+            FROM round_artifact_tracks
+            WHERE artifact_id = ?
+            ORDER BY track_order ASC
+            """,
+            (int(row["id"]),),
+        ).fetchall()
         return {
             "id": int(row["id"]),
             "round_id": int(row["round_id"]),
@@ -1039,9 +1461,21 @@ class RadioHTTPRequestHandler(BaseHTTPRequestHandler):
             "end_at": row["end_at"],
             "total_seconds": int(row["total_seconds"]),
             "created_at": row["created_at"],
+            "round_label": format_round_label(conn, row, self.ctx.cfg.timezone),
             "has_m3u": bool(m3u_path and m3u_path.exists()),
             "has_mp3": bool(mp3_path and mp3_path.exists()),
             "generation_summary": self._summarize_generation_log(str(row["generation_log"] or "")),
+            "tracks": [
+                {
+                    "track_id": int(track["track_order"]),
+                    "submission_id": int(track["submission_id"]),
+                    "song_id": int(track["song_id"]),
+                    "title": str(track["title"]),
+                    "artist": str(track["artist"]),
+                    "duration_seconds": int(track["duration_seconds"]),
+                }
+                for track in tracks
+            ],
         }
 
     def _artifact_file_path(self, row: sqlite3.Row, artifact_type: str) -> Path | None:
@@ -1055,6 +1489,26 @@ class RadioHTTPRequestHandler(BaseHTTPRequestHandler):
             return None
         return resolved
 
+    def _artifact_track_file_path(self, row: sqlite3.Row) -> Path | None:
+        raw_path = str(row["file_path"] or "").strip()
+        if not raw_path:
+            return None
+        resolved = Path(raw_path).resolve()
+        root = self.ctx.cfg.uploads_dir.resolve()
+        if resolved != root and root not in resolved.parents:
+            return None
+        return resolved
+
+    def _manual_download_file_path(self, row: sqlite3.Row) -> Path | None:
+        raw_path = str(row["file_path"] or "").strip()
+        if not raw_path:
+            return None
+        resolved = Path(raw_path).resolve()
+        root = self.ctx.cfg.uploads_dir.resolve()
+        if resolved != root and root not in resolved.parents:
+            return None
+        return resolved
+
     @staticmethod
     def _summarize_generation_log(value: str) -> str:
         lines = [line.strip() for line in value.splitlines() if line.strip()]
@@ -1062,6 +1516,53 @@ class RadioHTTPRequestHandler(BaseHTTPRequestHandler):
             return "생성 완료"
         summary = lines[-1]
         return summary if len(summary) <= 160 else f"{summary[:157]}..."
+
+    @staticmethod
+    def _yt_dlp_version() -> str | None:
+        try:
+            return importlib.metadata.version("yt-dlp")
+        except importlib.metadata.PackageNotFoundError:
+            return None
+
+    @staticmethod
+    def _yt_dlp_latest_version() -> tuple[str | None, str | None]:
+        try:
+            with urlopen("https://pypi.org/pypi/yt-dlp/json", timeout=5) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except Exception as exc:
+            return None, str(exc)
+        latest_version = str(((payload or {}).get("info") or {}).get("version") or "").strip() or None
+        return latest_version, None
+
+    @staticmethod
+    def _clear_loaded_module(module_prefix: str) -> None:
+        for name in list(sys.modules):
+            if name == module_prefix or name.startswith(f"{module_prefix}."):
+                sys.modules.pop(name, None)
+
+    @staticmethod
+    def _summarize_command_output(stdout: str | None, stderr: str | None) -> str:
+        chunks: list[str] = []
+        for stream in (stdout, stderr):
+            text = str(stream or "").strip()
+            if not text:
+                continue
+            last_line = text.splitlines()[-1].strip()
+            if last_line:
+                chunks.append(last_line[:200])
+        return " | ".join(chunks) if chunks else "-"
+
+    def _yt_dlp_status_payload(self) -> dict[str, Any]:
+        version = self._yt_dlp_version()
+        latest_version, latest_check_error = self._yt_dlp_latest_version()
+        return {
+            "installed": bool(version),
+            "version": version,
+            "latest_version": latest_version,
+            "update_available": bool(version and latest_version and version != latest_version),
+            "latest_check_error": latest_check_error,
+            "python": sys.executable,
+        }
 
     @staticmethod
     def _month_label(value: str | None) -> str | None:

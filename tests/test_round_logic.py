@@ -12,7 +12,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from radio_app.db import DB, utc_now_iso
-from radio_app.services.rounds import close_round, select_round_for_admin_close
+from radio_app.services.rounds import close_round, format_round_label, ranked_submissions, select_round_for_admin_close
 
 
 class RoundLogicTest(unittest.TestCase):
@@ -95,6 +95,37 @@ class RoundLogicTest(unittest.TestCase):
             self.assertTrue(Path(artifact["m3u_path"]).exists())
             self.assertTrue(Path(artifact["mp3_path"]).exists())
 
+    def test_close_round_ignores_playlist_size_when_time_allows(self) -> None:
+        round_id = self._seed_base()
+        with self.db.session() as conn:
+            conn.execute("UPDATE rounds SET playlist_size = 2, target_seconds = 180 WHERE id = ?", (round_id,))
+            for idx in range(1, 4):
+                conn.execute(
+                    "INSERT INTO songs(spotify_track_id, title, artist, album_art_url, external_url, created_at) VALUES (?, ?, 'a', '', '', ?)",
+                    (f"g{idx}", f"Group{idx}", utc_now_iso()),
+                )
+                song_id = int(conn.execute("SELECT id FROM songs WHERE spotify_track_id = ?", (f"g{idx}",)).fetchone()["id"])
+                conn.execute(
+                    "INSERT INTO submissions(round_id, user_id, song_id, submitted_at) VALUES (?, 1, ?, ?)",
+                    (round_id, song_id, f"2026-03-0{idx}T00:00:00Z"),
+                )
+                media = self.root / f"s{idx}.mp3"
+                media.write_bytes(b"audio")
+                conn.execute(
+                    "INSERT INTO audio_assets(song_id, file_path, duration_seconds, is_valid, validation_error, uploaded_at) VALUES (?, ?, 50, 1, NULL, ?)",
+                    (song_id, str(media), utc_now_iso()),
+                )
+
+            with (
+                patch("radio_app.services.rounds.validate_mp3_and_get_duration_seconds", side_effect=self._fake_validate_mp3),
+                patch("radio_app.services.rounds.merge_mp3_files", side_effect=self._fake_merge_mp3_files),
+            ):
+                result = close_round(conn, round_id, self.root / "artifacts")
+
+        self.assertEqual(result["status"], "closed")
+        self.assertEqual(result["selected_count"], 3)
+        self.assertEqual(result["total_seconds"], 150)
+
     def test_close_round_reports_progress_stages_in_order(self) -> None:
         round_id = self._seed_base()
         progress_events: list[tuple[str, str, int]] = []
@@ -132,6 +163,63 @@ class RoundLogicTest(unittest.TestCase):
             ["preparing", "validating-audio", "trimming-playlist", "writing-m3u", "merging-mp3", "finalizing"],
         )
         self.assertTrue(all(progress_events[idx][2] <= progress_events[idx + 1][2] for idx in range(len(progress_events) - 1)))
+
+    def test_ranked_submissions_can_sort_by_recent(self) -> None:
+        round_id = self._seed_base()
+        with self.db.session() as conn:
+            for idx, submitted_at in ((1, "2026-03-02T00:00:00Z"), (2, "2026-03-04T00:00:00Z"), (3, "2026-03-03T00:00:00Z")):
+                conn.execute(
+                    "INSERT INTO songs(spotify_track_id, title, artist, album_art_url, external_url, created_at) VALUES (?, ?, 'a', '', '', ?)",
+                    (f"r{idx}", f"Recent{idx}", utc_now_iso()),
+                )
+                song_id = int(conn.execute("SELECT id FROM songs WHERE spotify_track_id = ?", (f"r{idx}",)).fetchone()["id"])
+                conn.execute(
+                    "INSERT INTO submissions(round_id, user_id, song_id, submitted_at) VALUES (?, 1, ?, ?)",
+                    (round_id, song_id, submitted_at),
+                )
+                sub_id = int(conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"])
+                if idx == 1:
+                    for user_id in (1, 2):
+                        conn.execute(
+                            "INSERT INTO votes(round_id, user_id, submission_id, voted_at) VALUES (?, ?, ?, ?)",
+                            (round_id, user_id, sub_id, utc_now_iso()),
+                        )
+
+            popular = ranked_submissions(conn, round_id)
+            recent = ranked_submissions(conn, round_id, sort_by="recent")
+
+        self.assertEqual([item["title"] for item in popular[:3]], ["Recent1", "Recent3", "Recent2"])
+        self.assertEqual([item["title"] for item in recent[:3]], ["Recent2", "Recent3", "Recent1"])
+
+    def test_format_round_label_uses_local_month_at_utc_boundary(self) -> None:
+        round_row = {
+            "id": 10,
+            "cadence": "monthly",
+            "start_at": "2026-02-28T15:00:00Z",
+            "created_at": "2026-03-01T00:00:00Z",
+        }
+        with self.db.session() as conn:
+            self.assertEqual(format_round_label(conn, round_row, "Asia/Seoul"), "3월 1회차")
+
+    def test_format_round_label_adds_sequence_for_multiple_monthly_rounds(self) -> None:
+        with self.db.session() as conn:
+            conn.execute(
+                """
+                INSERT INTO rounds(cadence, status, start_at, end_at, playlist_size, target_seconds, loudnorm_enabled, created_at)
+                VALUES ('monthly', 'closed', '2026-02-28T15:00:00Z', '2026-03-31T15:00:00Z', 12, 2400, 0, '2026-03-10T00:00:00Z')
+                """,
+            )
+            first = conn.execute("SELECT * FROM rounds WHERE id = last_insert_rowid()").fetchone()
+            conn.execute(
+                """
+                INSERT INTO rounds(cadence, status, start_at, end_at, playlist_size, target_seconds, loudnorm_enabled, created_at)
+                VALUES ('monthly', 'open', '2026-02-28T15:00:00Z', '2026-03-31T15:00:00Z', 12, 2400, 0, '2026-03-20T00:00:00Z')
+                """,
+            )
+            second = conn.execute("SELECT * FROM rounds WHERE id = last_insert_rowid()").fetchone()
+
+            self.assertEqual(format_round_label(conn, first, "Asia/Seoul"), "3월 1회차")
+            self.assertEqual(format_round_label(conn, second, "Asia/Seoul"), "3월 2회차")
 
     def test_close_round_replaces_invalid_audio_with_next_ranked(self) -> None:
         round_id = self._seed_base()

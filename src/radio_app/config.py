@@ -5,6 +5,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+def _csv_env(name: str) -> tuple[str, ...]:
+    raw = os.getenv(name, "")
+    return tuple(item.strip() for item in raw.split(",") if item.strip())
+
+
 @dataclass(frozen=True)
 class AppConfig:
     host: str = os.getenv("RADIO_HOST", "127.0.0.1")
@@ -18,9 +23,16 @@ class AppConfig:
     riro_auth_mode: str = os.getenv("RIRO_AUTH_MODE", "riro")
     ffmpeg_path: str | None = os.getenv("RADIO_FFMPEG_PATH")
     scheduler_interval_seconds: int = int(os.getenv("RADIO_SCHEDULER_INTERVAL_SECONDS", "30"))
-    file_retention_seconds: int = int(os.getenv("RADIO_FILE_RETENTION_SECONDS", "1800"))
+    file_retention_seconds: int = int(os.getenv("RADIO_FILE_RETENTION_SECONDS", "86400"))
+    audit_log_retention_days: int = int(os.getenv("RADIO_AUDIT_LOG_RETENTION_DAYS", "30"))
+    sqlite_busy_timeout_ms: int = int(os.getenv("RADIO_SQLITE_BUSY_TIMEOUT_MS", "5000"))
+    sqlite_journal_mode: str = os.getenv("RADIO_SQLITE_JOURNAL_MODE", "WAL")
+    sqlite_synchronous: str = os.getenv("RADIO_SQLITE_SYNCHRONOUS", "NORMAL")
     yt_dlp_enabled: bool = os.getenv("RADIO_YT_DLP_ENABLED", "1").lower() in ("1", "true", "yes")
-    session_cookie_secure: bool = os.getenv("RADIO_SESSION_COOKIE_SECURE", "0").lower() in ("1", "true", "yes")
+    login_failure_window_seconds: int = int(os.getenv("RADIO_LOGIN_FAILURE_WINDOW_SECONDS", "300"))
+    login_failure_limit_per_user: int = int(os.getenv("RADIO_LOGIN_FAILURE_LIMIT_PER_USER", "10"))
+    session_cookie_secure: bool = os.getenv("RADIO_SESSION_COOKIE_SECURE", "1").lower() in ("1", "true", "yes")
+    super_admin_ids: tuple[str, ...] = _csv_env("RADIO_SUPER_ADMIN_IDS")
 
 
 def ensure_directories(cfg: AppConfig) -> None:

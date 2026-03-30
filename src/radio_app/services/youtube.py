@@ -8,6 +8,7 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from radio_app.services.audio import validate_mp3_and_get_duration_seconds
 
@@ -23,11 +24,51 @@ NEGATIVE_TERMS = {
     "karaoke",
     "instrumental",
     "inst",
-    "lyrics",
-    "lyric",
     "shorts",
 }
+NEGATIVE_PHRASES = {
+    "열린 음악회": 30,
+    "open concert": 30,
+    "broadcast": 30,
+    "방송": 30,
+}
+BROADCAST_SHOW_HINTS = {
+    "열린 음악회",
+    "열린음악회",
+    "open concert",
+    "이소라의 프로포즈",
+    "유희열의 스케치북",
+    "더 리슨",
+    "the listen",
+    "뮤캉스",
+    "더 시즌즈",
+    "the seasons",
+    "뮤직뱅크",
+    "music bank",
+    "인기가요",
+    "inkigayo",
+    "쇼 음악중심",
+    "쇼! 음악중심",
+    "음악중심",
+    "music core",
+    "엠카운트다운",
+    "m countdown",
+    "쇼챔피언",
+    "show champion",
+    "불후의 명곡",
+    "immortal songs",
+    "가요무대",
+    "가요대전",
+    "전국노래자랑",
+    "윤도현의 러브레터",
+    "드림콘서트",
+    "콘서트 7080",
+    "콘서트7080",
+}
+BROADCAST_NETWORK_HINTS = {"kbs", "sbs", "mbc", "ebs", "mnet", "jtbc", "tvn"}
+BROADCAST_META_HINTS = {"방송", "broadcast", "무대"}
 TOPIC_HINTS = {"topic", "official audio", "provided to youtube by"}
+LYRICS_HINTS = {"lyrics", "lyric", "가사"}
 NOISE_TOKENS = {
     "audio",
     "official",
@@ -100,6 +141,17 @@ def _overlap_score(requested: set[str], available: set[str]) -> int:
     return int((len(overlap) / len(requested)) * 100)
 
 
+def _looks_like_broadcast_performance(raw_text: str) -> bool:
+    lowered = (raw_text or "").casefold()
+    if any(hint in lowered for hint in BROADCAST_SHOW_HINTS):
+        return True
+
+    has_network = any(hint in lowered for hint in BROADCAST_NETWORK_HINTS)
+    has_meta = any(hint in lowered for hint in BROADCAST_META_HINTS)
+    has_date = bool(re.search(r"(19|20)\d{2}\s*년", lowered) or re.search(r"\b\d{6,8}\b", lowered))
+    return has_network and (has_meta or has_date)
+
+
 def _confidence_band(score: int, title_overlap: int, artist_overlap: int) -> str:
     if score >= 150 and title_overlap >= 90 and artist_overlap >= 45:
         return "strong"
@@ -108,6 +160,15 @@ def _confidence_band(score: int, title_overlap: int, artist_overlap: int) -> str
     if score >= 45:
         return "weak"
     return "reject"
+
+
+def _candidate_priority(candidate: RankedCandidate) -> int:
+    normalized = _normalize_text(f"{candidate.title} {candidate.uploader}")
+    if any(hint in normalized for hint in TOPIC_HINTS):
+        return 2
+    if any(hint in normalized for hint in LYRICS_HINTS):
+        return 1
+    return 0
 
 
 def _rank_candidate(entry: dict[str, Any], requested_artist: str, requested_title: str) -> RankedCandidate:
@@ -123,21 +184,28 @@ def _rank_candidate(entry: dict[str, Any], requested_artist: str, requested_titl
     title_tokens = _tokens(title)
     metadata_tokens = title_tokens | _tokens(uploader)
     combined_text = f"{title} {uploader} {video_url}"
+    combined_metadata = f"{title} {uploader}"
 
     title_overlap = _overlap_score(requested_title_tokens, title_tokens)
     artist_overlap = _overlap_score(requested_artist_tokens, metadata_tokens)
+    title_has_requested_title = bool(requested_title) and _contains_phrase(title, requested_title)
+    title_has_requested_artist = bool(requested_artist) and _contains_phrase(title, requested_artist)
+    title_has_artist_and_title = title_has_requested_title and title_has_requested_artist
 
     score = title_overlap + int(artist_overlap * 0.7)
     reasons: list[str] = []
 
-    if requested_title and _contains_phrase(title, requested_title):
+    if title_has_requested_title:
         score += 28
         reasons.append("title-phrase")
     if requested_artist and _contains_phrase(combined_text, requested_artist):
         score += 16
         reasons.append("artist-phrase")
+    if title_has_artist_and_title:
+        score += 36
+        reasons.append("title-artist-title")
 
-    normalized_combined = _normalize_text(combined_text)
+    normalized_combined = _normalize_text(combined_metadata)
     if any(hint in normalized_combined for hint in TOPIC_HINTS):
         score += 18
         reasons.append("topic-hint")
@@ -148,6 +216,17 @@ def _rank_candidate(entry: dict[str, Any], requested_artist: str, requested_titl
             score -= penalty
             reasons.append(f"-{term}")
 
+    lowered_metadata = combined_metadata.lower()
+    for phrase, penalty in NEGATIVE_PHRASES.items():
+        if phrase in lowered_metadata:
+            score -= penalty
+            reasons.append(f"-{phrase}")
+
+    is_broadcast_performance = _looks_like_broadcast_performance(combined_metadata)
+    if is_broadcast_performance:
+        score -= 140
+        reasons.append("broadcast-performance")
+
     if not title and not uploader:
         score -= 100
         reasons.append("missing-metadata")
@@ -157,6 +236,8 @@ def _rank_candidate(entry: dict[str, Any], requested_artist: str, requested_titl
         reasons.append("no-overlap")
 
     confidence = _confidence_band(score, title_overlap, artist_overlap)
+    if is_broadcast_performance:
+        confidence = "reject"
     reason = ",".join(reasons) if reasons else "metadata-match"
     return RankedCandidate(
         video_id=video_id,
@@ -233,6 +314,7 @@ def search_and_download(
         "no_warnings": True,
         "noplaylist": True,
         "default_search": "ytsearch8",
+        "ignoreerrors": True,
         "socket_timeout": 15,
         "retries": 2,
         "extractor_retries": 2,
@@ -244,22 +326,25 @@ def search_and_download(
         raise RuntimeError(f"candidate-search-failed:{exc}") from exc
 
     raw_entries = search_info.get("entries") or []
-    ranked_candidates = sorted(
-        (
-            _rank_candidate(entry, requested_artist=requested_artist, requested_title=requested_title)
-            for entry in raw_entries
-            if isinstance(entry, dict)
-        ),
-        key=lambda candidate: (candidate.score, candidate.video_id),
-        reverse=True,
-    )
+    ranked_candidates = [
+        _rank_candidate(entry, requested_artist=requested_artist, requested_title=requested_title)
+        for entry in raw_entries
+        if isinstance(entry, dict) and (entry.get("id") or entry.get("webpage_url"))
+    ]
+    ranked_candidates = [
+        candidate
+        for _index, candidate in sorted(
+            enumerate(ranked_candidates),
+            key=lambda item: (item[1].score, _candidate_priority(item[1]), -item[0], item[1].video_id),
+            reverse=True,
+        )
+    ]
 
     if not ranked_candidates:
         raise RuntimeError(f"no-candidates-for-query:{query}")
 
     viable_candidates = [candidate for candidate in ranked_candidates if candidate.confidence != "reject" and candidate.video_url]
-    fallback_candidates = [candidate for candidate in ranked_candidates if candidate.video_url]
-    download_queue = viable_candidates or fallback_candidates[:1]
+    download_queue = viable_candidates
     if not download_queue:
         raise RuntimeError(f"no-viable-candidates-for-query:{query}")
 
@@ -279,6 +364,84 @@ def search_and_download(
 
     detail = errors[-1] if errors else "unknown-error"
     raise RuntimeError(f"mp3 file not found after download for query: {query}; detail={detail}")
+
+
+def download_youtube_url(
+    url: str,
+    output_dir: Path,
+    ffmpeg_path: str | None = None,
+) -> DownloadedAudio:
+    """Download a specific YouTube URL as an mp3."""
+    try:
+        import yt_dlp  # noqa: WPS433 – optional dependency
+    except ImportError as exc:
+        raise RuntimeError(
+            "yt-dlp is not installed. Run `pip install yt-dlp` to enable YouTube downloads."
+        ) from exc
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    file_stub = _sanitize_filename(f"manual-{uuid4().hex}")
+    output_template = str(output_dir / f"{file_stub}.%(ext)s")
+    existing_files = {p.resolve() for p in output_dir.glob("*.mp3")}
+
+    ffmpeg_loc = ffmpeg_path or shutil.which("ffmpeg")
+    ydl_opts: dict[str, Any] = {
+        "format": "bestaudio/best",
+        "outtmpl": output_template,
+        "quiet": True,
+        "no_warnings": True,
+        "noplaylist": True,
+        "socket_timeout": 15,
+        "retries": 2,
+        "extractor_retries": 2,
+        "postprocessors": [
+            {
+                "key": "FFmpegExtractAudio",
+                "preferredcodec": "mp3",
+                "preferredquality": "192",
+            }
+        ],
+    }
+    if ffmpeg_loc:
+        ydl_opts["ffmpeg_location"] = str(Path(ffmpeg_loc).parent)
+
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=True)
+        if info is None:
+            raise RuntimeError(f"yt-dlp returned no info for url: {url}")
+
+    expected = output_dir / f"{file_stub}.mp3"
+    if expected.exists():
+        found = expected
+    else:
+        mp3_files = sorted(
+            (p for p in output_dir.glob("*.mp3") if p.resolve() not in existing_files),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        if not mp3_files:
+            raise RuntimeError(f"mp3 file not found after download for url: {url}")
+        found = mp3_files[0]
+
+    title = str(info.get("title") or info.get("track") or found.stem).strip()
+    uploader = str(info.get("uploader") or info.get("channel") or info.get("channel_name") or "").strip()
+    video_id = str(info.get("id") or "").strip()
+    video_url = str(info.get("webpage_url") or url).strip()
+    if not video_url and video_id:
+        video_url = f"https://www.youtube.com/watch?v={video_id}"
+
+    return DownloadedAudio(
+        path=found,
+        candidate=RankedCandidate(
+            video_id=video_id,
+            video_url=video_url or url,
+            title=title or found.stem,
+            uploader=uploader,
+            score=0,
+            confidence="direct",
+            reason="manual-url",
+        ),
+    )
 
 
 def ensure_audio_for_songs(

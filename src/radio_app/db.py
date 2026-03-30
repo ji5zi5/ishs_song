@@ -19,11 +19,20 @@ def utc_after_hours_iso(hours: int) -> str:
 @dataclass
 class DB:
     path: Path
+    busy_timeout_ms: int = 5000
+    journal_mode: str = "WAL"
+    synchronous: str = "NORMAL"
 
     def connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.path)
+        timeout_seconds = max(self.busy_timeout_ms, 0) / 1000
+        conn = sqlite3.connect(self.path, timeout=timeout_seconds)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute(f"PRAGMA busy_timeout = {max(self.busy_timeout_ms, 0)}")
+        if self.journal_mode.strip():
+            conn.execute(f"PRAGMA journal_mode = {self.journal_mode.strip()}")
+        if self.synchronous.strip():
+            conn.execute(f"PRAGMA synchronous = {self.synchronous.strip()}")
         return conn
 
     @contextmanager
@@ -119,6 +128,34 @@ class DB:
                     created_at TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS round_artifact_tracks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    artifact_id INTEGER NOT NULL REFERENCES round_artifacts(id) ON DELETE CASCADE,
+                    submission_id INTEGER NOT NULL REFERENCES submissions(id) ON DELETE CASCADE,
+                    song_id INTEGER NOT NULL REFERENCES songs(id) ON DELETE CASCADE,
+                    title TEXT NOT NULL,
+                    artist TEXT NOT NULL,
+                    file_path TEXT NOT NULL,
+                    duration_seconds INTEGER NOT NULL,
+                    track_order INTEGER NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE UNIQUE INDEX IF NOT EXISTS uq_round_artifact_tracks_order
+                    ON round_artifact_tracks(artifact_id, track_order);
+
+                CREATE TABLE IF NOT EXISTS manual_downloads (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    actor_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                    source_url TEXT NOT NULL,
+                    video_id TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    uploader TEXT NOT NULL,
+                    file_path TEXT NOT NULL,
+                    duration_seconds INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL
+                );
+
                 CREATE TABLE IF NOT EXISTS audit_logs (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     round_id INTEGER REFERENCES rounds(id) ON DELETE SET NULL,
@@ -139,6 +176,16 @@ class DB:
                     action TEXT NOT NULL,
                     created_at TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS keyed_rate_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    identifier TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_keyed_rate_events_lookup
+                    ON keyed_rate_events(action, identifier, created_at);
                 """
             )
             self._ensure_round_close_columns(conn)

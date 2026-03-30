@@ -50,7 +50,12 @@ def main() -> None:
     cfg = replace(cfg, ffmpeg_path=str(ffmpeg_path))
     ensure_directories(cfg)
 
-    db = DB(path=cfg.db_path)
+    db = DB(
+        path=cfg.db_path,
+        busy_timeout_ms=cfg.sqlite_busy_timeout_ms,
+        journal_mode=cfg.sqlite_journal_mode,
+        synchronous=cfg.sqlite_synchronous,
+    )
     db.init_schema()
 
     song_search = ITunesSearchClient(country=cfg.search_country)
@@ -61,6 +66,7 @@ def main() -> None:
         artifacts_dir=cfg.artifacts_dir,
         interval_seconds=cfg.scheduler_interval_seconds,
         file_retention_seconds=cfg.file_retention_seconds,
+        audit_log_retention_days=cfg.audit_log_retention_days,
         ffmpeg_path=cfg.ffmpeg_path,
         uploads_dir=cfg.uploads_dir,
         yt_dlp_enabled=cfg.yt_dlp_enabled,

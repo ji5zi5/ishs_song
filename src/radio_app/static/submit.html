@@ -68,6 +68,16 @@
       transform: translateY(-1px);
     }
 
+    .site-footer {
+      width: min(1060px, calc(100vw - 28px));
+      margin: 4px auto 14px;
+      padding: 0 4px;
+      text-align: center;
+      color: #6c8878;
+      font-size: 11px;
+      letter-spacing: 0.02em;
+    }
+
     .auth-actions {
       display: flex;
       gap: 8px;
@@ -133,6 +143,39 @@
       gap: 8px;
       flex-wrap: wrap;
       align-items: center;
+    }
+
+    .panel-toolbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-bottom: 6px;
+    }
+
+    .toolbar-title {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .sort-wrap {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 10px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--surface-soft);
+    }
+
+    .sort-label {
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.01em;
+      color: var(--muted);
     }
 
     input.query {
@@ -296,13 +339,56 @@
       line-height: 1.5;
     }
 
+    .sort-select {
+      border: 1px solid #c9dfd2;
+      border-radius: 999px;
+      padding: 7px 32px 7px 11px;
+      font: inherit;
+      color: var(--text);
+      background: #fff;
+      font-size: 13px;
+      font-weight: 700;
+      outline: none;
+      cursor: pointer;
+      appearance: none;
+      background-image:
+        linear-gradient(45deg, transparent 50%, var(--primary) 50%),
+        linear-gradient(135deg, var(--primary) 50%, transparent 50%);
+      background-position:
+        calc(100% - 16px) calc(50% - 1px),
+        calc(100% - 11px) calc(50% - 1px);
+      background-size: 5px 5px, 5px 5px;
+      background-repeat: no-repeat;
+    }
+
+    .sort-select:focus { border-color: var(--primary); }
+
     @media (max-width: 780px) {
-      .item { grid-template-columns: 50px 1fr auto; }
+      .item {
+        grid-template-columns: 50px 1fr auto;
+      }
       .item img { width: 50px; height: 50px; }
       .header-row { flex-direction: column; align-items: flex-start; }
       .header-left { width: 100%; }
-      .header-row .auth-actions { width: 100%; }
-      .auth-actions .btn { flex: 1; }
+      .header-row .auth-actions {
+        width: auto;
+        max-width: 228px;
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      .auth-actions .btn {
+        flex: 0 0 auto;
+        padding: 8px 10px;
+      }
+      .panel-toolbar { align-items: stretch; }
+      .toolbar-title { width: 100%; justify-content: space-between; }
+      .sort-wrap { width: 100%; justify-content: space-between; }
+      .sort-select { flex: 1; }
+      .site-footer {
+        width: min(100vw - 20px, 1060px);
+        margin-bottom: 10px;
+        font-size: 10px;
+      }
     }
   </style>
 </head>
@@ -319,8 +405,8 @@
           </nav>
         </div>
         <div class="auth-actions">
-          <button id="loginBtn" type="button" class="btn mini" onclick="openLoginModal()">로그인</button>
-          <button id="logoutBtn" type="button" class="btn light mini" onclick="logout()" style="display:none;">로그아웃</button>
+          <button id="loginBtn" type="button" class="btn mini">로그인</button>
+          <button id="logoutBtn" type="button" class="btn light mini" style="display:none;">로그아웃</button>
         </div>
       </div>
       <div class="muted header-note">신청 페이지입니다. 곡 검색과 신청만 처리합니다.</div>
@@ -330,16 +416,29 @@
       <h2 id="search-title">곡 검색</h2>
       <div class="row">
         <input id="query" class="query" placeholder="곡명 또는 아티스트" aria-label="곡 검색어" />
-        <button type="button" class="btn" onclick="search()">검색</button>
+        <button id="searchBtn" type="button" class="btn">검색</button>
       </div>
       <div id="searchResults" class="list" aria-live="polite"></div>
     </section>
 
     <section class="panel" aria-labelledby="submitted-title">
-      <h2 id="submitted-title">현재 신청 목록</h2>
+      <div class="panel-toolbar">
+        <div class="toolbar-title">
+          <h2 id="submitted-title">현재 신청 목록</h2>
+          <div class="sort-wrap">
+            <span class="sort-label">정렬</span>
+            <select id="songsSort" class="sort-select" aria-label="신청 목록 정렬">
+              <option value="popular">인기순</option>
+              <option value="recent">등록순</option>
+            </select>
+          </div>
+        </div>
+      </div>
       <div id="songs" class="list" aria-live="polite"></div>
     </section>
   </main>
+
+  <footer class="site-footer">Copyright © ISHS 32nd 엄지오</footer>
 
   <section id="loginModal" class="login-modal" aria-hidden="true">
     <div class="login-card" role="dialog" aria-modal="true" aria-labelledby="loginTitle">
@@ -348,8 +447,8 @@
       <input id="riroPw" class="login-field" type="password" placeholder="리로스쿨 PW" aria-label="리로스쿨 비밀번호" />
       <p class="muted login-help">로그인이 계속 실패하면 VPN이나 프록시를 끄고 다시 시도하세요.</p>
       <div class="auth-actions">
-        <button type="button" class="btn" onclick="login()">로그인</button>
-        <button type="button" class="btn light" onclick="closeLoginModal()">닫기</button>
+        <button id="loginSubmitBtn" type="button" class="btn">로그인</button>
+        <button id="closeLoginBtn" type="button" class="btn light">닫기</button>
       </div>
     </div>
   </section>
@@ -359,24 +458,25 @@
       <h3 id="confirmTitle">신청 확인</h3>
       <div id="confirmMessage" class="confirm-text"></div>
       <div class="auth-actions">
-        <button id="confirmOkBtn" type="button" class="btn" onclick="closeConfirmModal(true)">신청</button>
-        <button type="button" class="btn light" onclick="closeConfirmModal(false)">취소</button>
+        <button id="confirmOkBtn" type="button" class="btn">신청</button>
+        <button id="confirmCancelBtn" type="button" class="btn light">취소</button>
       </div>
     </div>
   </section>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
-  <script>
+  <script nonce="__CSP_NONCE__">
     const ERROR_MESSAGES = {
       "auth-required": "로그인이 필요합니다.",
       "admin-required": "관리자 권한이 필요합니다.",
       "riro_id-and-riro_pw-required": "리로 ID/PW를 입력하세요.",
       "riro-auth-failed": "리로 로그인에 실패했습니다. ID/PW 또는 네트워크 상태를 확인하세요.",
       "rate-limit": "요청이 너무 많습니다. 잠시 후 다시 시도하세요.",
-      "round-not-open": "현재 월 신청이 열려 있지 않습니다.",
-      "submission-limit-reached": "월별 신청은 최대 3곡까지 가능합니다.",
-      "duplicate-track-in-round": "이 곡은 이번 달에 이미 신청되어 있습니다.",
+      "round-not-open": "현재 회차 신청이 열려 있지 않습니다.",
+      "submission-limit-reached": "회차별 신청은 최대 3곡까지 가능합니다.",
+      "duplicate-track-in-round": "이 곡은 이번 회차에 이미 신청되어 있습니다.",
+      "invalid-song-sort": "지원하지 않는 정렬 기준입니다.",
       "song-search-unavailable": "곡 검색 서버에 연결할 수 없습니다. 잠시 후 다시 시도하세요.",
       "request-failed": "요청 처리 중 오류가 발생했습니다."
     };
@@ -417,6 +517,16 @@
       document.getElementById("loginBtn").style.display = isLoggedIn ? "none" : "";
       document.getElementById("logoutBtn").style.display = isLoggedIn ? "" : "none";
       document.getElementById("adminNavLink").style.display = isLoggedIn && isAdmin ? "" : "none";
+    }
+
+    function safeImageUrl(value) {
+      const fallback = "https://placehold.co/80x80?text=No+Art";
+      if (!value) return fallback;
+      try {
+        const url = new URL(String(value), window.location.origin);
+        if (url.protocol === "http:" || url.protocol === "https:") return url.href;
+      } catch (_) {}
+      return fallback;
     }
 
     function openLoginModal() {
@@ -504,25 +614,34 @@
     function trackCard(track, withAction) {
       const row = document.createElement("div");
       row.className = "item";
-      const extraMeta = track.vote_count !== undefined
-        ? `<div class="meta">${track.vote_count}표</div>`
-        : "";
-      row.innerHTML = `
-        <img src="${track.album_art_url || "https://placehold.co/80x80?text=No+Art"}" alt="${track.title} 앨범아트" />
-        <div>
-          <div class="title">${track.title}</div>
-          <div class="meta">${track.artist}</div>
-          ${extraMeta}
-        </div>
-        <div></div>
-      `;
+      const image = document.createElement("img");
+      image.src = safeImageUrl(track.album_art_url);
+      image.alt = String(track.title || "곡") + " 앨범아트";
+
+      const info = document.createElement("div");
+      const title = document.createElement("div");
+      title.className = "title";
+      title.textContent = track.title || "";
+      const artist = document.createElement("div");
+      artist.className = "meta";
+      artist.textContent = track.artist || "";
+      info.append(title, artist);
+      if (track.vote_count !== undefined) {
+        const votes = document.createElement("div");
+        votes.className = "meta";
+        votes.textContent = `${track.vote_count || 0}표`;
+        info.appendChild(votes);
+      }
+
+      const actionSlot = document.createElement("div");
+      row.append(image, info, actionSlot);
 
       if (withAction) {
         const btn = document.createElement("button");
         btn.className = "btn light";
         btn.textContent = "신청";
-        btn.onclick = async () => {
-          const confirmed = await openConfirmModal(`"${track.title}" 곡을 신청하시겠습니까?`);
+        btn.addEventListener("click", async () => {
+          const confirmed = await openConfirmModal("\"" + String(track.title || "") + "\" 곡을 신청하시겠습니까?");
           if (!confirmed) return;
           try {
             await api("/api/submissions", "POST", track);
@@ -531,8 +650,8 @@
           } catch (err) {
             toast(`신청 실패: ${err.message}`, true);
           }
-        };
-        row.lastElementChild.replaceWith(btn);
+        });
+        actionSlot.replaceWith(btn);
       }
 
       return row;
@@ -614,8 +733,9 @@
 
     async function loadSongs() {
       const root = document.getElementById("songs");
+      const sort = document.getElementById("songsSort").value;
       try {
-        const data = await api("/api/public/songs");
+        const data = await api(`/api/public/songs?sort=${encodeURIComponent(sort)}`);
         const items = data.items || [];
         root.innerHTML = "";
         if (items.length === 0) {
@@ -638,6 +758,13 @@
     });
 
     document.addEventListener("keydown", handleModalKeydown);
+    document.getElementById("loginBtn").addEventListener("click", openLoginModal);
+    document.getElementById("logoutBtn").addEventListener("click", logout);
+    document.getElementById("searchBtn").addEventListener("click", () => search());
+    document.getElementById("loginSubmitBtn").addEventListener("click", login);
+    document.getElementById("closeLoginBtn").addEventListener("click", closeLoginModal);
+    document.getElementById("confirmOkBtn").addEventListener("click", () => closeConfirmModal(true));
+    document.getElementById("confirmCancelBtn").addEventListener("click", () => closeConfirmModal(false));
 
     document.getElementById("query").addEventListener("input", scheduleSearch);
     document.getElementById("query").addEventListener("keydown", (event) => {
@@ -647,6 +774,7 @@
         search();
       }
     });
+    document.getElementById("songsSort").addEventListener("change", loadSongs);
 
     refreshMe();
     loadSongs();

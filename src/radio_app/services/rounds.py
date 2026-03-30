@@ -5,7 +5,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
 from radio_app.db import utc_now_iso
@@ -32,6 +32,47 @@ def _parse_iso(ts: str) -> datetime:
     if ts.endswith("Z"):
         ts = ts[:-1] + "+00:00"
     return datetime.fromisoformat(ts)
+
+
+def _local_round_datetime(ts: str | None, timezone_name: str) -> datetime | None:
+    if not ts:
+        return None
+    try:
+        return _parse_iso(str(ts)).astimezone(ZoneInfo(timezone_name))
+    except (TypeError, ValueError):
+        return None
+
+
+def _local_round_month_key(ts: str | None, timezone_name: str) -> tuple[int, int] | None:
+    local_dt = _local_round_datetime(ts, timezone_name)
+    if local_dt is None:
+        return None
+    return local_dt.year, local_dt.month
+
+
+def format_round_label(conn: sqlite3.Connection, round_row: sqlite3.Row | dict[str, Any], timezone_name: str) -> str:
+    round_data = dict(round_row)
+    local_dt = _local_round_datetime(round_data.get("start_at"), timezone_name)
+    if local_dt is None:
+        return "-"
+
+    month_label = f"{local_dt.month}월"
+    target_key = local_dt.year, local_dt.month
+    matching_rows = [
+        row
+        for row in conn.execute(
+            "SELECT id, start_at, created_at FROM rounds ORDER BY created_at ASC, id ASC"
+        ).fetchall()
+        if _local_round_month_key(row["start_at"], timezone_name) == target_key
+    ]
+    if len(matching_rows) <= 1:
+        return f"{month_label} 1회차"
+
+    round_id = int(round_data.get("round_id", round_data.get("id")))
+    for index, row in enumerate(matching_rows, start=1):
+        if int(row["id"]) == round_id:
+            return f"{month_label} {index}회차"
+    return f"{month_label} {len(matching_rows) + 1}회차"
 
 
 def _emit_progress(callback: ProgressCallback | None, stage: str, message: str, progress_percent: int) -> None:
@@ -193,10 +234,65 @@ def enforce_rate_limit(
     return True
 
 
-def ranked_submissions(conn: sqlite3.Connection, round_id: int) -> list[sqlite3.Row]:
+def _prune_keyed_rate_events(conn: sqlite3.Connection, action: str, floor: str) -> None:
+    conn.execute(
+        "DELETE FROM keyed_rate_events WHERE action = ? AND created_at < ?",
+        (action, floor),
+    )
+
+
+def check_keyed_rate_limit(
+    conn: sqlite3.Connection,
+    identifier: str,
+    action: str,
+    max_count: int,
+    window_seconds: int,
+) -> bool:
+    if not identifier:
+        return True
+    now = datetime.now(UTC)
+    floor = _iso(now - timedelta(seconds=window_seconds))
+    _prune_keyed_rate_events(conn, action, floor)
+    count = conn.execute(
+        "SELECT COUNT(*) AS cnt FROM keyed_rate_events WHERE identifier = ? AND action = ? AND created_at >= ?",
+        (identifier, action, floor),
+    ).fetchone()["cnt"]
+    return int(count) < max_count
+
+
+def record_keyed_rate_event(
+    conn: sqlite3.Connection,
+    identifier: str,
+    action: str,
+    window_seconds: int,
+) -> None:
+    if not identifier:
+        return
+    now = datetime.now(UTC)
+    floor = _iso(now - timedelta(seconds=window_seconds))
+    _prune_keyed_rate_events(conn, action, floor)
+    conn.execute(
+        "INSERT INTO keyed_rate_events(identifier, action, created_at) VALUES (?, ?, ?)",
+        (identifier, action, utc_now_iso()),
+    )
+
+
+def clear_keyed_rate_events(conn: sqlite3.Connection, identifier: str, action: str) -> None:
+    if not identifier:
+        return
+    conn.execute(
+        "DELETE FROM keyed_rate_events WHERE identifier = ? AND action = ?",
+        (identifier, action),
+    )
+
+
+def ranked_submissions(conn: sqlite3.Connection, round_id: int, sort_by: str = "popular") -> list[sqlite3.Row]:
+    order_by = "vote_count DESC, s.submitted_at ASC, s.id ASC"
+    if sort_by == "recent":
+        order_by = "s.submitted_at DESC, s.id DESC"
     return list(
         conn.execute(
-            """
+            f"""
             SELECT
                 s.id AS submission_id,
                 s.song_id AS song_id,
@@ -220,7 +316,7 @@ def ranked_submissions(conn: sqlite3.Connection, round_id: int) -> list[sqlite3.
                 GROUP BY submission_id
             ) v ON v.submission_id = s.id
             WHERE s.round_id = ? AND s.is_hidden = 0
-            ORDER BY vote_count DESC, s.submitted_at ASC, s.id ASC
+            ORDER BY {order_by}
             """,
             (round_id, round_id),
         ).fetchall()
@@ -282,8 +378,6 @@ def close_round(
         selected: list[dict] = []
         skipped: list[str] = []
         for item in ranked:
-            if len(selected) >= int(row["playlist_size"]):
-                break
             file_path = item["file_path"]
             duration = int(item["duration_seconds"] or 0)
             is_valid = int(item["is_valid"]) if item["is_valid"] is not None else 0
@@ -355,6 +449,32 @@ def close_round(
             """,
             (round_id, str(m3u_path), str(mp3_path), total_seconds, generation_log, utc_now_iso()),
         )
+        artifact_row = conn.execute(
+            "SELECT id FROM round_artifacts WHERE round_id = ?",
+            (round_id,),
+        ).fetchone()
+        artifact_id = int(artifact_row["id"])
+        conn.execute("DELETE FROM round_artifact_tracks WHERE artifact_id = ?", (artifact_id,))
+        for order, item in enumerate(selected, start=1):
+            conn.execute(
+                """
+                INSERT INTO round_artifact_tracks(
+                    artifact_id, submission_id, song_id, title, artist, file_path, duration_seconds, track_order, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    artifact_id,
+                    int(item["submission_id"]),
+                    int(item["song_id"]),
+                    str(item["title"]),
+                    str(item["artist"]),
+                    str(item["file_path"]),
+                    int(item["duration_seconds"]),
+                    order,
+                    utc_now_iso(),
+                ),
+            )
         conn.execute(
             "UPDATE rounds SET status = 'closed', closed_at = ? WHERE id = ?",
             (utc_now_iso(), round_id),

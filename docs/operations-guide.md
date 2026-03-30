@@ -38,12 +38,15 @@ curl -sS http://127.0.0.1:8092/api/public/current-round
 - 운영 요약: 현재 유저 수, 관리자 수, 제출 수, 최근 상태
 - 기본 설정: 월간/주간, 곡 수, 목표 길이, loudnorm 여부
 - 수동 마감: 현재 열린 회차를 즉시 마감하고, 진행 바에서 단계 상태를 표시
-- 관리자 승인: 특정 사용자에게 관리자 권한 부여/회수
+- 관리자 승인: 특정 사용자에게 관리자 권한 부여
+- 관리자 권한 회수: `RADIO_SUPER_ADMIN_IDS`에 등록된 슈퍼관리자만 가능, 단 슈퍼관리자 대상 회수는 불가
 - 최근 아티팩트: 최신 `m3u/mp3` 다운로드
+- 유지보수: 모든 관리자가 `yt-dlp` 버전 확인과 업데이트 실행 가능
 - 운영 로그: 최근 관리 작업과 음원 선택 로그를 요약/펼침형으로 확인
 
 ## First Admin Bootstrap
 기본 유저는 관리자 권한이 없습니다. 첫 관리자는 DB에서 직접 올려야 합니다.
+슈퍼관리자 기준은 DB가 아니라 환경변수 `RADIO_SUPER_ADMIN_IDS=riro1,riro2` 로 정합니다.
 
 ```bash
 python3 - <<'PY'
@@ -77,16 +80,19 @@ PY
 
 ## Retention and Disk Use
 기본값:
-- `RADIO_FILE_RETENTION_SECONDS=1800`
+- `RADIO_FILE_RETENTION_SECONDS=86400`
+- `RADIO_AUDIT_LOG_RETENTION_DAYS=30`
 
 이 시간이 지나면 스케줄러가 다음을 정리합니다.
 - 오래된 `uploads/` 파일
 - 오래된 `artifacts/` 파일
 - 연결된 `audio_assets`, `round_artifacts` row
+- 오래된 `audit_logs` row
 
 의미:
 - 서버 디스크가 무한정 커지는 것을 막습니다.
-- 대신 예전 결과 파일은 30분 뒤 서버에 남지 않습니다.
+- 대신 예전 결과 파일은 기본 24시간 뒤 서버에서 정리됩니다.
+- 운영 로그도 기본 30일 이후 자동 정리됩니다.
 
 운영에서 더 길게 보관하려면:
 ```bash
@@ -101,8 +107,12 @@ RIRO_AUTH_MODE=mock RADIO_PORT=8093 RADIO_FILE_RETENTION_SECONDS=0 python3 main.
 ## Recommended Production Settings
 - `RADIO_SESSION_COOKIE_SECURE=1` when serving over HTTPS
 - `RADIO_FILE_RETENTION_SECONDS` adjusted to your storage policy
+- `RADIO_AUDIT_LOG_RETENTION_DAYS` adjusted to your audit policy
+- keep SQLite defaults at `WAL` / `NORMAL` / `busy_timeout=5000ms` unless you have a specific reason to change them
 - `RADIO_YT_DLP_ENABLED=1` unless you have a separate audio ingestion path
 - `RIRO_AUTH_MODE=riro` in real deployment
+
+`yt-dlp 업데이트` 버튼은 관리자면 누를 수 있지만, 서버에서 패키지 인덱스로 나갈 수 있어야 하고 현재 가상환경에 쓰기 권한도 있어야 합니다.
 
 ## Common Failure Cases
 ### Server exits immediately on startup

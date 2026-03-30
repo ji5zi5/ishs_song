@@ -68,6 +68,16 @@
       transform: translateY(-1px);
     }
 
+    .site-footer {
+      width: min(1060px, calc(100vw - 28px));
+      margin: 4px auto 14px;
+      padding: 0 4px;
+      text-align: center;
+      color: #6c8878;
+      font-size: 11px;
+      letter-spacing: 0.02em;
+    }
+
     .muted { color: var(--muted); }
 
     .header-note {
@@ -318,8 +328,21 @@
       .header-left { width: 100%; }
       .item { grid-template-columns: 24px 50px 1fr auto; }
       .item img { width: 50px; height: 50px; }
-      .header-row .auth-actions { width: 100%; }
-      .auth-actions .btn { flex: 1; }
+      .header-row .auth-actions {
+        width: auto;
+        max-width: 228px;
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      .auth-actions .btn {
+        flex: 0 0 auto;
+        padding: 8px 10px;
+      }
+      .site-footer {
+        width: min(100vw - 20px, 1060px);
+        margin-bottom: 10px;
+        font-size: 10px;
+      }
     }
   </style>
 </head>
@@ -336,8 +359,8 @@
           </nav>
         </div>
         <div class="auth-actions">
-          <button id="loginBtn" type="button" class="btn mini" onclick="openLoginModal()">로그인</button>
-          <button id="logoutBtn" type="button" class="btn light mini" onclick="logout()" style="display:none;">로그아웃</button>
+          <button id="loginBtn" type="button" class="btn mini">로그인</button>
+          <button id="logoutBtn" type="button" class="btn light mini" style="display:none;">로그아웃</button>
         </div>
       </div>
       <div class="muted header-note">메인은 조회 전용이며 신청·투표는 각 페이지에서 진행합니다.</div>
@@ -345,13 +368,15 @@
 
     <section class="panel" aria-labelledby="rank-title">
       <div class="head">
-        <h2 id="rank-title">이번 달 실시간 순위</h2>
-        <button type="button" onclick="loadSongs()">새로고침</button>
+        <h2 id="rank-title">이번 회차 실시간 순위</h2>
+        <button id="refreshSongsBtn" type="button">새로고침</button>
       </div>
       <div id="summary" class="summary">불러오는 중...</div>
       <div id="songs" class="list" aria-live="polite"></div>
     </section>
   </main>
+
+  <footer class="site-footer">Copyright © ISHS 32nd 엄지오</footer>
 
   <section id="loginModal" class="login-modal" aria-hidden="true">
     <div class="login-card" role="dialog" aria-modal="true" aria-labelledby="loginTitle">
@@ -360,22 +385,22 @@
       <input id="riroPw" class="login-field" type="password" placeholder="리로스쿨 PW" aria-label="리로스쿨 비밀번호" />
       <p class="muted login-help">로그인이 계속 실패하면 VPN이나 프록시를 끄고 다시 시도하세요.</p>
       <div class="auth-actions">
-        <button type="button" class="btn" onclick="login()">로그인</button>
-        <button type="button" class="btn light" onclick="closeLoginModal()">닫기</button>
+        <button id="loginSubmitBtn" type="button" class="btn">로그인</button>
+        <button id="closeLoginBtn" type="button" class="btn light">닫기</button>
       </div>
     </div>
   </section>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
-  <script>
+  <script nonce="__CSP_NONCE__">
     const ERROR_MESSAGES = {
       "auth-required": "로그인이 필요합니다.",
       "admin-required": "관리자 권한이 필요합니다.",
       "riro_id-and-riro_pw-required": "리로 ID/PW를 입력하세요.",
       "riro-auth-failed": "리로 로그인에 실패했습니다. ID/PW 또는 네트워크 상태를 확인하세요.",
       "rate-limit": "요청이 너무 많습니다. 잠시 후 다시 시도하세요.",
-      "round-not-open": "현재 월 투표가 열려 있지 않습니다.",
+      "round-not-open": "현재 회차 투표가 열려 있지 않습니다.",
       "song-search-unavailable": "곡 검색 서버에 연결할 수 없습니다. 잠시 후 다시 시도하세요.",
       "request-failed": "요청 처리 중 오류가 발생했습니다."
     };
@@ -411,10 +436,21 @@
       setTimeout(() => box.classList.remove("show"), 2000);
     }
 
-    function monthLabelFromRound(round) {
+    function roundLabelFromRound(round) {
+      if (round && typeof round.round_label === "string" && round.round_label.trim()) return round.round_label;
       const start = round && round.start_at ? new Date(round.start_at) : new Date();
-      if (Number.isNaN(start.getTime())) return `${new Date().getMonth() + 1}월`;
-      return `${start.getMonth() + 1}월`;
+      if (Number.isNaN(start.getTime())) return `${new Date().getMonth() + 1}월 1회차`;
+      return `${start.getMonth() + 1}월 1회차`;
+    }
+
+    function safeImageUrl(value) {
+      const fallback = "https://placehold.co/80x80?text=No+Art";
+      if (!value) return fallback;
+      try {
+        const url = new URL(String(value), window.location.origin);
+        if (url.protocol === "http:" || url.protocol === "https:") return url.href;
+      } catch (_) {}
+      return fallback;
     }
 
     function setAuthButtons(isLoggedIn, isAdmin = false) {
@@ -513,9 +549,9 @@
       try {
         const data = await api("/api/public/songs");
         const items = data.items || [];
-        const monthLabel = monthLabelFromRound(data.round);
-        rankTitle.textContent = `${monthLabel} 실시간 순위`;
-        summary.textContent = `${monthLabel} · 총 ${items.length}곡`;
+        const roundLabel = roundLabelFromRound(data.round);
+        rankTitle.textContent = `${roundLabel} 실시간 순위`;
+        summary.textContent = `${roundLabel} · 총 ${items.length}곡`;
 
         if (items.length === 0) {
           root.innerHTML = `<div class="empty">아직 등록된 곡이 없습니다.</div>`;
@@ -526,15 +562,29 @@
         items.forEach((item, idx) => {
           const el = document.createElement("div");
           el.className = "item";
-          el.innerHTML = `
-            <div class="rank">${idx + 1}</div>
-            <img src="${item.album_art_url || "https://placehold.co/80x80?text=No+Art"}" alt="${item.title} 앨범아트" />
-            <div>
-              <div class="title">${item.title}</div>
-              <div class="meta">${item.artist}</div>
-            </div>
-            <div class="votes">${item.vote_count}표</div>
-          `;
+
+          const rank = document.createElement("div");
+          rank.className = "rank";
+          rank.textContent = String(idx + 1);
+
+          const image = document.createElement("img");
+          image.src = safeImageUrl(item.album_art_url);
+          image.alt = `${item.title || "곡"} 앨범아트`;
+
+          const info = document.createElement("div");
+          const title = document.createElement("div");
+          title.className = "title";
+          title.textContent = item.title || "";
+          const meta = document.createElement("div");
+          meta.className = "meta";
+          meta.textContent = item.artist || "";
+          info.append(title, meta);
+
+          const votes = document.createElement("div");
+          votes.className = "votes";
+          votes.textContent = `${item.vote_count || 0}표`;
+
+          el.append(rank, image, info, votes);
           root.appendChild(el);
         });
       } catch (err) {
@@ -548,6 +598,11 @@
     });
 
     document.addEventListener("keydown", handleModalKeydown);
+    document.getElementById("loginBtn").addEventListener("click", openLoginModal);
+    document.getElementById("logoutBtn").addEventListener("click", logout);
+    document.getElementById("refreshSongsBtn").addEventListener("click", loadSongs);
+    document.getElementById("loginSubmitBtn").addEventListener("click", login);
+    document.getElementById("closeLoginBtn").addEventListener("click", closeLoginModal);
 
     refreshMe();
     loadSongs();

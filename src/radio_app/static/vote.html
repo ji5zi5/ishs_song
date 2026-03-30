@@ -68,6 +68,16 @@
       transform: translateY(-1px);
     }
 
+    .site-footer {
+      width: min(1060px, calc(100vw - 28px));
+      margin: 4px auto 14px;
+      padding: 0 4px;
+      text-align: center;
+      color: #6c8878;
+      font-size: 11px;
+      letter-spacing: 0.02em;
+    }
+
     .auth-actions {
       display: flex;
       gap: 8px;
@@ -134,6 +144,70 @@
       flex-wrap: wrap;
       align-items: center;
     }
+
+    .panel-toolbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-bottom: 6px;
+    }
+
+    .toolbar-title {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .toolbar-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .sort-wrap {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 10px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--surface-soft);
+    }
+
+    .sort-label {
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.01em;
+      color: var(--muted);
+    }
+
+    .sort-select {
+      border: 1px solid #c9dfd2;
+      border-radius: 999px;
+      padding: 7px 32px 7px 11px;
+      font: inherit;
+      color: var(--text);
+      background: #fff;
+      font-size: 13px;
+      font-weight: 700;
+      outline: none;
+      cursor: pointer;
+      appearance: none;
+      background-image:
+        linear-gradient(45deg, transparent 50%, var(--primary) 50%),
+        linear-gradient(135deg, var(--primary) 50%, transparent 50%);
+      background-position:
+        calc(100% - 16px) calc(50% - 1px),
+        calc(100% - 11px) calc(50% - 1px);
+      background-size: 5px 5px, 5px 5px;
+      background-repeat: no-repeat;
+    }
+
+    .sort-select:focus { border-color: var(--primary); }
 
     .btn {
       font: inherit;
@@ -297,8 +371,27 @@
       .item img { width: 50px; height: 50px; }
       .header-row { flex-direction: column; align-items: flex-start; }
       .header-left { width: 100%; }
-      .header-row .auth-actions { width: 100%; }
-      .auth-actions .btn { flex: 1; }
+      .header-row .auth-actions {
+        width: auto;
+        max-width: 228px;
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      .auth-actions .btn {
+        flex: 0 0 auto;
+        padding: 8px 10px;
+      }
+      .panel-toolbar { align-items: stretch; }
+      .toolbar-title { width: 100%; justify-content: space-between; }
+      .toolbar-actions { width: 100%; }
+      .toolbar-actions .btn { flex: 1; }
+      .sort-wrap { width: 100%; justify-content: space-between; }
+      .sort-select { flex: 1; }
+      .site-footer {
+        width: min(100vw - 20px, 1060px);
+        margin-bottom: 10px;
+        font-size: 10px;
+      }
     }
   </style>
 </head>
@@ -315,23 +408,36 @@
           </nav>
         </div>
         <div class="auth-actions">
-          <button id="loginBtn" type="button" class="btn mini" onclick="openLoginModal()">로그인</button>
-          <button id="logoutBtn" type="button" class="btn light mini" onclick="logout()" style="display:none;">로그아웃</button>
+          <button id="loginBtn" type="button" class="btn mini">로그인</button>
+          <button id="logoutBtn" type="button" class="btn light mini" style="display:none;">로그아웃</button>
         </div>
       </div>
       <div class="muted header-note">투표 페이지입니다. 최대 3곡까지 선택해 저장하세요.</div>
     </section>
 
     <section class="panel" aria-labelledby="vote-title">
-      <h2 id="vote-title">투표 목록</h2>
-      <div class="row">
-        <button type="button" class="btn light" onclick="loadSongs()">새로고침</button>
-        <button type="button" class="btn" onclick="saveVotes()">저장</button>
+      <div class="panel-toolbar">
+        <div class="toolbar-title">
+          <h2 id="vote-title">투표 목록</h2>
+          <div class="sort-wrap">
+            <span class="sort-label">정렬</span>
+            <select id="songsSort" class="sort-select" aria-label="투표 목록 정렬">
+              <option value="popular">인기순</option>
+              <option value="recent">등록순</option>
+            </select>
+          </div>
+        </div>
+        <div class="toolbar-actions">
+          <button id="refreshSongsBtn" type="button" class="btn light">새로고침</button>
+          <button id="saveVotesBtn" type="button" class="btn">저장</button>
+        </div>
       </div>
       <div id="songs" class="list" aria-live="polite"></div>
       <div id="voteResult" class="state">아직 저장되지 않았습니다.</div>
     </section>
   </main>
+
+  <footer class="site-footer">Copyright © ISHS 32nd 엄지오</footer>
 
   <section id="loginModal" class="login-modal" aria-hidden="true">
     <div class="login-card" role="dialog" aria-modal="true" aria-labelledby="loginTitle">
@@ -340,15 +446,15 @@
       <input id="riroPw" class="login-field" type="password" placeholder="리로스쿨 PW" aria-label="리로스쿨 비밀번호" />
       <p class="muted login-help">로그인이 계속 실패하면 VPN이나 프록시를 끄고 다시 시도하세요.</p>
       <div class="auth-actions">
-        <button type="button" class="btn" onclick="login()">로그인</button>
-        <button type="button" class="btn light" onclick="closeLoginModal()">닫기</button>
+        <button id="loginSubmitBtn" type="button" class="btn">로그인</button>
+        <button id="closeLoginBtn" type="button" class="btn light">닫기</button>
       </div>
     </div>
   </section>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
-  <script>
+  <script nonce="__CSP_NONCE__">
     const selected = new Set();
     const ERROR_MESSAGES = {
       "auth-required": "로그인이 필요합니다.",
@@ -356,9 +462,10 @@
       "riro_id-and-riro_pw-required": "리로 ID/PW를 입력하세요.",
       "riro-auth-failed": "리로 로그인에 실패했습니다. ID/PW 또는 네트워크 상태를 확인하세요.",
       "rate-limit": "요청이 너무 많습니다. 잠시 후 다시 시도하세요.",
-      "round-not-open": "현재 월 투표가 열려 있지 않습니다.",
+      "round-not-open": "현재 회차 투표가 열려 있지 않습니다.",
       "vote-limit-reached": "투표는 최대 3곡까지 선택할 수 있습니다.",
       "invalid-submission-selection": "유효하지 않은 곡이 포함되어 있습니다. 목록을 새로고침해 주세요.",
+      "invalid-song-sort": "지원하지 않는 정렬 기준입니다.",
       "request-failed": "요청 처리 중 오류가 발생했습니다."
     };
     let lastFocusedElement = null;
@@ -397,6 +504,20 @@
       document.getElementById("loginBtn").style.display = isLoggedIn ? "none" : "";
       document.getElementById("logoutBtn").style.display = isLoggedIn ? "" : "none";
       document.getElementById("adminNavLink").style.display = isLoggedIn && isAdmin ? "" : "none";
+    }
+
+    function safeImageUrl(value) {
+      const fallback = "https://placehold.co/80x80?text=No+Art";
+      if (!value) return fallback;
+      try {
+        const url = new URL(String(value), window.location.origin);
+        if (url.protocol === "http:" || url.protocol === "https:") return url.href;
+      } catch (_) {}
+      return fallback;
+    }
+
+    function currentSongsSort() {
+      return document.getElementById("songsSort").value;
     }
 
     function openLoginModal() {
@@ -485,7 +606,7 @@
     async function loadSongs() {
       const root = document.getElementById("songs");
       try {
-        const data = await api("/api/public/songs");
+        const data = await api(`/api/public/songs?sort=${encodeURIComponent(currentSongsSort())}`);
         const items = data.items || [];
         const validIds = new Set(items.map((item) => item.submission_id));
         [...selected].forEach((id) => {
@@ -500,19 +621,30 @@
         items.forEach((item) => {
           const row = document.createElement("div");
           row.className = "item";
-          row.innerHTML = `
-            <input type="checkbox" aria-label="${item.title} 투표 선택" />
-            <img src="${item.album_art_url || "https://placehold.co/80x80?text=No+Art"}" alt="${item.title} 앨범아트" />
-            <div>
-              <div class="title">${item.title}</div>
-              <div class="meta">${item.artist}</div>
-            </div>
-            <div class="votes">${item.vote_count}표</div>
-          `;
+          const cb = document.createElement("input");
+          cb.type = "checkbox";
+          cb.setAttribute("aria-label", `${item.title || "곡"} 투표 선택`);
 
-          const cb = row.querySelector("input[type='checkbox']");
+          const image = document.createElement("img");
+          image.src = safeImageUrl(item.album_art_url);
+          image.alt = `${item.title || "곡"} 앨범아트`;
+
+          const info = document.createElement("div");
+          const title = document.createElement("div");
+          title.className = "title";
+          title.textContent = item.title || "";
+          const artist = document.createElement("div");
+          artist.className = "meta";
+          artist.textContent = item.artist || "";
+          info.append(title, artist);
+
+          const votes = document.createElement("div");
+          votes.className = "votes";
+          votes.textContent = `${item.vote_count || 0}표`;
+
+          row.append(cb, image, info, votes);
           cb.checked = selected.has(item.submission_id);
-          cb.onchange = () => {
+          cb.addEventListener("change", () => {
             if (cb.checked) selected.add(item.submission_id);
             else selected.delete(item.submission_id);
             if (selected.size > 3) {
@@ -520,7 +652,7 @@
               selected.delete(item.submission_id);
               toast("최대 3곡까지 선택 가능합니다.", true);
             }
-          };
+          });
 
           root.appendChild(row);
         });
@@ -559,6 +691,13 @@
     });
 
     document.addEventListener("keydown", handleModalKeydown);
+    document.getElementById("loginBtn").addEventListener("click", openLoginModal);
+    document.getElementById("logoutBtn").addEventListener("click", logout);
+    document.getElementById("songsSort").addEventListener("change", loadSongs);
+    document.getElementById("refreshSongsBtn").addEventListener("click", loadSongs);
+    document.getElementById("saveVotesBtn").addEventListener("click", saveVotes);
+    document.getElementById("loginSubmitBtn").addEventListener("click", login);
+    document.getElementById("closeLoginBtn").addEventListener("click", closeLoginModal);
 
     async function bootstrap() {
       await refreshMe();

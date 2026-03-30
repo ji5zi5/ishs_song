@@ -32,6 +32,93 @@ class SanitizeFilenameTest(unittest.TestCase):
 
 
 class CandidateRankingTest(unittest.TestCase):
+    def test_korean_broadcast_live_candidate_is_ranked_below_clean_upload(self) -> None:
+        live_broadcast = _rank_candidate(
+            {
+                "id": "a1",
+                "title": "나윤권 - 나였으면 [열린 음악회/Open Concert] | KBS 250525 방송",
+                "uploader": "KBS Kpop",
+                "webpage_url": "https://youtu.be/a1",
+            },
+            requested_artist="나윤권",
+            requested_title="나였으면",
+        )
+        clean_upload = _rank_candidate(
+            {
+                "id": "b2",
+                "title": "나윤권 - 나였으면",
+                "uploader": "official channel",
+                "webpage_url": "https://youtu.be/b2",
+            },
+            requested_artist="나윤권",
+            requested_title="나였으면",
+        )
+        self.assertLess(live_broadcast.score, clean_upload.score)
+        self.assertEqual(live_broadcast.confidence, "reject")
+
+    def test_historical_kbs_broadcast_candidate_is_rejected(self) -> None:
+        broadcast_clip = _rank_candidate(
+            {
+                "id": "a1",
+                "title": "야다 - 이미 슬픈 사랑 [이소라의 프로포즈 1999년 07월 10일] | KBS 방송",
+                "uploader": "KBS Entertain",
+                "webpage_url": "https://youtu.be/a1",
+            },
+            requested_artist="야다",
+            requested_title="이미 슬픈 사랑",
+        )
+        clean_upload = _rank_candidate(
+            {
+                "id": "b2",
+                "title": "야다 - 이미 슬픈 사랑",
+                "uploader": "official channel",
+                "webpage_url": "https://youtu.be/b2",
+            },
+            requested_artist="야다",
+            requested_title="이미 슬픈 사랑",
+        )
+        self.assertLess(broadcast_clip.score, clean_upload.score)
+        self.assertEqual(broadcast_clip.confidence, "reject")
+
+    def test_music_show_broadcast_candidate_is_rejected(self) -> None:
+        broadcast_clip = _rank_candidate(
+            {
+                "id": "a1",
+                "title": "가수 - 노래 | 쇼! 음악중심 MBC 20260315 방송",
+                "uploader": "MBCkpop",
+                "webpage_url": "https://youtu.be/a1",
+            },
+            requested_artist="가수",
+            requested_title="노래",
+        )
+        self.assertEqual(broadcast_clip.confidence, "reject")
+
+    def test_the_listen_mucance_candidate_is_rejected(self) -> None:
+        broadcast_clip = _rank_candidate(
+            {
+                "id": "a1",
+                "title": "[풀버전] 이 노래 언제쯤 질려요? AJRY... 우리들의 영원한 스테디셀러👑 나윤권 '나였으면'🎵 | [더 리슨: 뮤캉스] 안동편",
+                "uploader": "SBS Entertainment",
+                "webpage_url": "https://youtu.be/a1",
+            },
+            requested_artist="나윤권",
+            requested_title="나였으면",
+        )
+        self.assertEqual(broadcast_clip.confidence, "reject")
+
+    def test_title_with_artist_and_song_beats_topic_only_match(self) -> None:
+        title_match = _rank_candidate(
+            {"id": "a1", "title": "NewJeans - Ditto", "uploader": "label channel", "webpage_url": "https://youtu.be/a1"},
+            requested_artist="NewJeans",
+            requested_title="Ditto",
+        )
+        topic_only = _rank_candidate(
+            {"id": "b2", "title": "Ditto", "uploader": "NewJeans - Topic", "webpage_url": "https://youtu.be/b2"},
+            requested_artist="NewJeans",
+            requested_title="Ditto",
+        )
+        self.assertGreater(title_match.score, topic_only.score)
+
     def test_topic_candidate_wins_when_title_and_artist_match(self) -> None:
         topic = _rank_candidate(
             {"id": "a1", "title": "Artist - Song", "uploader": "Artist - Topic", "webpage_url": "https://youtu.be/a1"},
@@ -45,6 +132,21 @@ class CandidateRankingTest(unittest.TestCase):
         )
         self.assertGreater(topic.score, generic.score)
         self.assertIn("topic-hint", topic.reason)
+
+    def test_plain_lyrics_candidate_is_not_penalized(self) -> None:
+        lyrics = _rank_candidate(
+            {"id": "a1", "title": "Artist - Song lyrics", "uploader": "random uploader", "webpage_url": "https://youtu.be/a1"},
+            requested_artist="Artist",
+            requested_title="Song",
+        )
+        clean = _rank_candidate(
+            {"id": "b2", "title": "Artist - Song", "uploader": "random uploader", "webpage_url": "https://youtu.be/b2"},
+            requested_artist="Artist",
+            requested_title="Song",
+        )
+        self.assertEqual(lyrics.score, clean.score)
+        self.assertEqual(lyrics.confidence, clean.confidence)
+        self.assertNotIn("-lyrics", lyrics.reason)
 
     def test_better_title_match_can_beat_weaker_topic_candidate(self) -> None:
         weak_topic = _rank_candidate(
@@ -61,6 +163,238 @@ class CandidateRankingTest(unittest.TestCase):
 
 
 class SearchAndDownloadTest(unittest.TestCase):
+    def test_search_ignores_unavailable_candidates_and_uses_next_result(self) -> None:
+        attempted_urls: list[str] = []
+
+        class FakeDL:
+            def __init__(self, opts) -> None:
+                self.opts = opts
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> bool:
+                return False
+
+            def extract_info(self, q, download=True):
+                if not download:
+                    if not self.opts.get("ignoreerrors"):
+                        raise RuntimeError("ERROR: [youtube] IoLtgb_SESs: This video is not available")
+                    return {
+                        "entries": [
+                            None,
+                            {
+                                "id": "bbb2",
+                                "title": "트니트니 - 쇠똥구리",
+                                "uploader": "official channel",
+                                "webpage_url": "https://youtu.be/bbb2",
+                            },
+                        ]
+                    }
+                query = str(q)
+                attempted_urls.append(query)
+                if "bbb2" in query:
+                    out = Path(str(self.opts["outtmpl"]).replace("%(ext)s", "mp3"))
+                    out.write_bytes(b"ok")
+                    return {"id": "bbb2"}
+                raise RuntimeError("unexpected candidate")
+
+        fake_mod = types.SimpleNamespace(YoutubeDL=FakeDL)
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td)
+            with patch("radio_app.services.youtube._sanitize_filename", return_value="song-query"):
+                with patch.dict("sys.modules", {"yt_dlp": fake_mod}):
+                    got = search_and_download("트니트니 - 쇠똥구리", out)
+
+        self.assertEqual(got.candidate.video_id, "bbb2")
+        self.assertEqual(attempted_urls[0], "https://youtu.be/bbb2")
+
+    def test_prefers_lyrics_fallback_over_broadcast_show_candidate(self) -> None:
+        attempted_urls: list[str] = []
+
+        class FakeDL:
+            def __init__(self, opts) -> None:
+                self.opts = opts
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> bool:
+                return False
+
+            def extract_info(self, q, download=True):
+                if not download:
+                    return {
+                        "entries": [
+                            {
+                                "id": "show1",
+                                "title": "[풀버전] 이 노래 언제쯤 질려요? AJRY... 우리들의 영원한 스테디셀러👑 나윤권 '나였으면'🎵 | [더 리슨: 뮤캉스] 안동편",
+                                "uploader": "SBS Entertainment",
+                                "webpage_url": "https://youtu.be/show1",
+                            },
+                            {
+                                "id": "lyric2",
+                                "title": "나윤권 - 나였으면 [가사/Lyrics]",
+                                "uploader": "random uploader",
+                                "webpage_url": "https://youtu.be/lyric2",
+                            },
+                        ]
+                    }
+                query = str(q)
+                attempted_urls.append(query)
+                if "lyric2" in query:
+                    out = Path(str(self.opts["outtmpl"]).replace("%(ext)s", "mp3"))
+                    out.write_bytes(b"ok")
+                    return {"id": "lyric2"}
+                raise RuntimeError("unexpected candidate")
+
+        fake_mod = types.SimpleNamespace(YoutubeDL=FakeDL)
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td)
+            with patch("radio_app.services.youtube._sanitize_filename", return_value="song-query"):
+                with patch.dict("sys.modules", {"yt_dlp": fake_mod}):
+                    got = search_and_download("나윤권 - 나였으면", out)
+
+        self.assertEqual(got.candidate.video_id, "lyric2")
+        self.assertEqual(attempted_urls[0], "https://youtu.be/lyric2")
+
+    def test_skips_korean_broadcast_live_candidate_before_clean_upload(self) -> None:
+        attempted_urls: list[str] = []
+
+        class FakeDL:
+            def __init__(self, opts) -> None:
+                self.opts = opts
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> bool:
+                return False
+
+            def extract_info(self, q, download=True):
+                if not download:
+                    return {
+                        "entries": [
+                            {
+                                "id": "aaa1",
+                                "title": "나윤권 - 나였으면 [열린 음악회/Open Concert] | KBS 250525 방송",
+                                "uploader": "KBS Kpop",
+                                "webpage_url": "https://youtu.be/aaa1",
+                            },
+                            {
+                                "id": "bbb2",
+                                "title": "나윤권 - 나였으면",
+                                "uploader": "official channel",
+                                "webpage_url": "https://youtu.be/bbb2",
+                            },
+                        ]
+                    }
+                query = str(q)
+                attempted_urls.append(query)
+                if "bbb2" in query:
+                    out = Path(str(self.opts["outtmpl"]).replace("%(ext)s", "mp3"))
+                    out.write_bytes(b"ok")
+                    return {"id": "bbb2"}
+                raise RuntimeError("unexpected candidate")
+
+        fake_mod = types.SimpleNamespace(YoutubeDL=FakeDL)
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td)
+            with patch("radio_app.services.youtube._sanitize_filename", return_value="song-query"):
+                with patch.dict("sys.modules", {"yt_dlp": fake_mod}):
+                    got = search_and_download("나윤권 - 나였으면", out)
+
+        self.assertEqual(got.candidate.video_id, "bbb2")
+        self.assertEqual(attempted_urls[0], "https://youtu.be/bbb2")
+
+    def test_skips_historical_kbs_broadcast_candidate_before_clean_upload(self) -> None:
+        attempted_urls: list[str] = []
+
+        class FakeDL:
+            def __init__(self, opts) -> None:
+                self.opts = opts
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> bool:
+                return False
+
+            def extract_info(self, q, download=True):
+                if not download:
+                    return {
+                        "entries": [
+                            {
+                                "id": "aaa1",
+                                "title": "야다 - 이미 슬픈 사랑 [이소라의 프로포즈 1999년 07월 10일] | KBS 방송",
+                                "uploader": "KBS Entertain",
+                                "webpage_url": "https://youtu.be/aaa1",
+                            },
+                            {
+                                "id": "bbb2",
+                                "title": "야다 - 이미 슬픈 사랑",
+                                "uploader": "official channel",
+                                "webpage_url": "https://youtu.be/bbb2",
+                            },
+                        ]
+                    }
+                query = str(q)
+                attempted_urls.append(query)
+                if "bbb2" in query:
+                    out = Path(str(self.opts["outtmpl"]).replace("%(ext)s", "mp3"))
+                    out.write_bytes(b"ok")
+                    return {"id": "bbb2"}
+                raise RuntimeError("unexpected candidate")
+
+        fake_mod = types.SimpleNamespace(YoutubeDL=FakeDL)
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td)
+            with patch("radio_app.services.youtube._sanitize_filename", return_value="song-query"):
+                with patch.dict("sys.modules", {"yt_dlp": fake_mod}):
+                    got = search_and_download("야다 - 이미 슬픈 사랑", out)
+
+        self.assertEqual(got.candidate.video_id, "bbb2")
+        self.assertEqual(attempted_urls[0], "https://youtu.be/bbb2")
+
+    def test_prefers_candidate_with_artist_and_song_in_title_over_topic_only_match(self) -> None:
+        attempted_urls: list[str] = []
+
+        class FakeDL:
+            def __init__(self, opts) -> None:
+                self.opts = opts
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> bool:
+                return False
+
+            def extract_info(self, q, download=True):
+                if not download:
+                    return {
+                        "entries": [
+                            {"id": "topic1", "title": "Ditto", "uploader": "NewJeans - Topic", "webpage_url": "https://youtu.be/topic1"},
+                            {"id": "exact2", "title": "NewJeans - Ditto", "uploader": "label channel", "webpage_url": "https://youtu.be/exact2"},
+                        ]
+                    }
+                query = str(q)
+                attempted_urls.append(query)
+                if "exact2" in query:
+                    out = Path(str(self.opts["outtmpl"]).replace("%(ext)s", "mp3"))
+                    out.write_bytes(b"ok")
+                    return {"id": "exact2"}
+                raise RuntimeError("unexpected candidate")
+
+        fake_mod = types.SimpleNamespace(YoutubeDL=FakeDL)
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td)
+            with patch("radio_app.services.youtube._sanitize_filename", return_value="song-query"):
+                with patch.dict("sys.modules", {"yt_dlp": fake_mod}):
+                    got = search_and_download("NewJeans - Ditto", out)
+
+        self.assertEqual(got.candidate.video_id, "exact2")
+        self.assertEqual(attempted_urls[0], "https://youtu.be/exact2")
+
     @patch("radio_app.services.youtube.yt_dlp", create=True)
     def test_raises_when_yt_dlp_not_installed(self, _mock: MagicMock) -> None:
         with patch.dict("sys.modules", {"yt_dlp": None}):
@@ -92,12 +426,16 @@ class SearchAndDownloadTest(unittest.TestCase):
                     search_and_download("artist - new song", out)
 
     def test_sets_timeout_and_retry_options_for_yt_dlp(self) -> None:
-        captured_opts: dict = {}
+        captured_search_opts: dict = {}
+        captured_download_opts: dict = {}
 
         class FakeDL:
             def __init__(self, opts) -> None:
                 self.opts = opts
-                captured_opts.update(opts)
+                if opts.get("default_search"):
+                    captured_search_opts.update(opts)
+                else:
+                    captured_download_opts.update(opts)
 
             def __enter__(self):
                 return self
@@ -121,9 +459,13 @@ class SearchAndDownloadTest(unittest.TestCase):
                     got = search_and_download("Artist - Song", out)
 
             self.assertEqual(got.path, expected)
-            self.assertEqual(captured_opts.get("socket_timeout"), 15)
-            self.assertEqual(captured_opts.get("retries"), 2)
-            self.assertEqual(captured_opts.get("extractor_retries"), 2)
+            self.assertEqual(captured_search_opts.get("socket_timeout"), 15)
+            self.assertEqual(captured_search_opts.get("retries"), 2)
+            self.assertEqual(captured_search_opts.get("extractor_retries"), 2)
+            self.assertTrue(captured_search_opts.get("ignoreerrors"))
+            self.assertEqual(captured_download_opts.get("socket_timeout"), 15)
+            self.assertEqual(captured_download_opts.get("retries"), 2)
+            self.assertEqual(captured_download_opts.get("extractor_retries"), 2)
 
     def test_ranked_fallback_prefers_better_topic_candidate(self) -> None:
         class FakeDL:

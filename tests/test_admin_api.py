@@ -8,6 +8,7 @@ import time
 import unittest
 import urllib.error
 import urllib.request
+from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 
@@ -22,6 +23,7 @@ from radio_app.config import AppConfig
 from radio_app.db import DB, utc_now_iso
 from radio_app.services.music_search import ITunesSearchClient
 from radio_app.services.rounds import ensure_open_round, set_setting
+from radio_app.services.youtube import DownloadedAudio, RankedCandidate
 
 
 class AdminApiTest(unittest.TestCase):
@@ -45,6 +47,7 @@ class AdminApiTest(unittest.TestCase):
             uploads_dir=self.uploads_dir,
             artifacts_dir=self.artifacts_dir,
             riro_auth_mode="mock",
+            super_admin_ids=("admin",),
         )
         self.ctx = AppContext(cfg=self.cfg, db=self.db, song_search=ITunesSearchClient(country="KR"))
         self.server = make_server(self.ctx)
@@ -64,9 +67,11 @@ class AdminApiTest(unittest.TestCase):
     def _seed_data(self) -> None:
         with self.db.session() as conn:
             self.admin_user_id = self._insert_user(conn, "admin", "관리자", True)
+            self.manager_user_id = self._insert_user(conn, "manager", "부관리자", True)
             self.member_user_id = self._insert_user(conn, "member", "일반유저", False)
             self.other_user_id = self._insert_user(conn, "other", "신청자", False)
             self.admin_cookie = f"session={issue_session(conn, self.admin_user_id, 24)}"
+            self.manager_cookie = f"session={issue_session(conn, self.manager_user_id, 24)}"
             self.member_cookie = f"session={issue_session(conn, self.member_user_id, 24)}"
             set_setting(conn, "round_default_cadence", "weekly")
             set_setting(conn, "default_playlist_size", "15")
@@ -83,13 +88,23 @@ class AdminApiTest(unittest.TestCase):
             )
             self.m3u_path = self.artifacts_dir / f"round-{self.round_id}.m3u"
             self.mp3_path = self.artifacts_dir / f"round-{self.round_id}.mp3"
+            self.track_path = self.uploads_dir / "youtube" / "visible.mp3"
+            self.track_path.parent.mkdir(parents=True, exist_ok=True)
             self.m3u_path.write_text("#EXTM3U\n", encoding="utf-8")
             self.mp3_path.write_bytes(b"fake-mp3")
+            self.track_path.write_bytes(b"fake-track")
             conn.execute(
                 "INSERT INTO round_artifacts(round_id, m3u_path, mp3_path, total_seconds, generation_log, created_at) VALUES (?, ?, ?, ?, ?, ?)",
                 (self.round_id, str(self.m3u_path), str(self.mp3_path), 1810, "merged\nselected=2", utc_now_iso()),
             )
             self.artifact_id = int(conn.execute("SELECT id FROM round_artifacts WHERE round_id = ?", (self.round_id,)).fetchone()["id"])
+            conn.execute(
+                """
+                INSERT INTO round_artifact_tracks(artifact_id, submission_id, song_id, title, artist, file_path, duration_seconds, track_order, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (self.artifact_id, self.visible_submission_id, 1, "Visible Song", "Visible Artist", str(self.track_path), 120, 1, utc_now_iso()),
+            )
             conn.execute(
                 "INSERT INTO audit_logs(round_id, actor_user_id, action, detail, created_at) VALUES (?, ?, ?, ?, ?)",
                 (self.round_id, self.admin_user_id, "seed", "initial entry", utc_now_iso()),
@@ -114,13 +129,22 @@ class AdminApiTest(unittest.TestCase):
         )
         return int(conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"])
 
-    def _request(self, path: str, method: str = "GET", body: dict | None = None, cookie: str | None = None) -> tuple[int, dict, bytes]:
+    def _request(
+        self,
+        path: str,
+        method: str = "GET",
+        body: dict | None = None,
+        cookie: str | None = None,
+        extra_headers: dict[str, str] | None = None,
+    ) -> tuple[int, dict, bytes]:
         data = json.dumps(body).encode("utf-8") if body is not None else None
         headers = {}
         if body is not None:
             headers["Content-Type"] = "application/json"
         if cookie:
             headers["Cookie"] = cookie
+        if extra_headers:
+            headers.update(extra_headers)
         request = urllib.request.Request(f"{self.base_url}{path}", data=data, headers=headers, method=method)
         try:
             with urllib.request.urlopen(request, timeout=5) as response:
@@ -128,8 +152,15 @@ class AdminApiTest(unittest.TestCase):
         except urllib.error.HTTPError as exc:
             return exc.code, dict(exc.headers), exc.read()
 
-    def _request_json(self, path: str, method: str = "GET", body: dict | None = None, cookie: str | None = None) -> tuple[int, dict, dict]:
-        status, headers, raw = self._request(path, method=method, body=body, cookie=cookie)
+    def _request_json(
+        self,
+        path: str,
+        method: str = "GET",
+        body: dict | None = None,
+        cookie: str | None = None,
+        extra_headers: dict[str, str] | None = None,
+    ) -> tuple[int, dict, dict]:
+        status, headers, raw = self._request(path, method=method, body=body, cookie=cookie, extra_headers=extra_headers)
         payload = json.loads(raw.decode("utf-8")) if raw else {}
         return status, headers, payload
 
@@ -164,10 +195,13 @@ class AdminApiTest(unittest.TestCase):
     def test_admin_users_endpoint_returns_expected_fields(self) -> None:
         status, _, payload = self._request_json("/api/admin/users", cookie=self.admin_cookie)
         self.assertEqual(status, 200)
-        self.assertGreaterEqual(len(payload["users"]), 3)
+        self.assertGreaterEqual(len(payload["users"]), 4)
         admin_user = next(user for user in payload["users"] if user["id"] == self.admin_user_id)
+        manager_user = next(user for user in payload["users"] if user["id"] == self.manager_user_id)
         self.assertEqual(admin_user["display_name"], "관리자")
         self.assertTrue(admin_user["is_admin_approved"])
+        self.assertTrue(admin_user["is_super_admin"])
+        self.assertFalse(manager_user["is_super_admin"])
         self.assertIn("created_at", admin_user)
 
     def test_admin_page_contains_dedicated_audit_scroll_container(self) -> None:
@@ -177,6 +211,159 @@ class AdminApiTest(unittest.TestCase):
         html = raw.decode("utf-8")
         self.assertIn('class="list audit-list"', html)
         self.assertIn('id="auditList"', html)
+
+    def test_admin_yt_dlp_status_and_update_require_admin(self) -> None:
+        status, _, payload = self._request_json("/api/admin/maintenance/yt-dlp")
+        self.assertEqual(status, 401)
+        self.assertEqual(payload["error"], "auth-required")
+
+        pypi_payload = mock.Mock()
+        pypi_payload.read.return_value = json.dumps({"info": {"version": "2026.4.1"}}).encode("utf-8")
+        pypi_payload.__enter__ = lambda s: s
+        pypi_payload.__exit__ = lambda s, exc_type, exc, tb: False
+        with (
+            mock.patch("radio_app.app.importlib.metadata.version", return_value="2026.3.3"),
+            mock.patch("radio_app.app.urlopen", return_value=pypi_payload),
+        ):
+            status, _, payload = self._request_json("/api/admin/maintenance/yt-dlp", cookie=self.manager_cookie)
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["version"], "2026.3.3")
+        self.assertEqual(payload["latest_version"], "2026.4.1")
+        self.assertTrue(payload["update_available"])
+        self.assertTrue(payload["installed"])
+
+        status, _, payload = self._request_json("/api/admin/maintenance/yt-dlp", cookie=self.member_cookie)
+        self.assertEqual(status, 403)
+        self.assertEqual(payload["error"], "admin-required")
+
+    def test_admin_yt_dlp_status_handles_latest_version_lookup_failure(self) -> None:
+        with (
+            mock.patch("radio_app.app.importlib.metadata.version", return_value="2026.3.3"),
+            mock.patch("radio_app.app.urlopen", side_effect=OSError("network down")),
+        ):
+            status, _, payload = self._request_json("/api/admin/maintenance/yt-dlp", cookie=self.manager_cookie)
+
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["version"], "2026.3.3")
+        self.assertIsNone(payload["latest_version"])
+        self.assertFalse(payload["update_available"])
+        self.assertEqual(payload["latest_check_error"], "network down")
+
+    def test_admin_can_update_yt_dlp_and_audit_is_written(self) -> None:
+        completed = mock.Mock()
+        completed.returncode = 0
+        completed.stdout = "Successfully installed yt-dlp-2026.4.1\n"
+        completed.stderr = ""
+
+        with (
+            mock.patch("radio_app.app.importlib.metadata.version", side_effect=["2026.3.3", "2026.4.1"]),
+            mock.patch("radio_app.app.subprocess.run", return_value=completed) as mocked_run,
+            mock.patch("radio_app.app.sys.modules", {"yt_dlp": object(), "yt_dlp.utils": object(), "other": object()}),
+        ):
+            status, _, payload = self._request_json(
+                "/api/admin/maintenance/yt-dlp/update",
+                method="POST",
+                body={},
+                cookie=self.manager_cookie,
+            )
+
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["before_version"], "2026.3.3")
+        self.assertEqual(payload["after_version"], "2026.4.1")
+        self.assertTrue(payload["changed"])
+        mocked_run.assert_called_once()
+        with self.db.session() as conn:
+            audit = conn.execute("SELECT action, detail FROM audit_logs WHERE action = 'yt_dlp_updated' ORDER BY id DESC LIMIT 1").fetchone()
+            self.assertIsNotNone(audit)
+            self.assertIn('"after_version": "2026.4.1"', audit["detail"])
+
+    def test_admin_manual_youtube_download_requires_admin_and_rejects_invalid_url(self) -> None:
+        status, _, payload = self._request_json(
+            "/api/admin/manual-downloads/youtube",
+            method="POST",
+            body={"url": "https://youtu.be/test"},
+        )
+        self.assertEqual(status, 401)
+        self.assertEqual(payload["error"], "auth-required")
+
+        status, _, payload = self._request_json(
+            "/api/admin/manual-downloads/youtube",
+            method="POST",
+            body={"url": "https://example.com/not-youtube"},
+            cookie=self.manager_cookie,
+        )
+        self.assertEqual(status, 400)
+        self.assertEqual(payload["error"], "invalid-youtube-url")
+
+        status, _, payload = self._request_json(
+            "/api/admin/manual-downloads/youtube",
+            method="POST",
+            body={"url": "https://youtu.be/test"},
+            cookie=self.member_cookie,
+        )
+        self.assertEqual(status, 403)
+        self.assertEqual(payload["error"], "admin-required")
+
+    def test_admin_manual_youtube_download_and_download_endpoint(self) -> None:
+        manual_path = self.uploads_dir / "manual" / "manual-abc123.mp3"
+        manual_path.parent.mkdir(parents=True, exist_ok=True)
+        manual_path.write_bytes(b"manual-track")
+        fake_download = DownloadedAudio(
+            path=manual_path,
+            candidate=RankedCandidate(
+                video_id="abc123",
+                video_url="https://youtu.be/abc123",
+                title="Manual Song",
+                uploader="Manual Channel",
+                score=0,
+                confidence="direct",
+                reason="manual-url",
+            ),
+        )
+
+        with (
+            mock.patch("radio_app.app.download_youtube_url", return_value=fake_download),
+            mock.patch("radio_app.app.validate_mp3_and_get_duration_seconds", return_value=(123, None)),
+        ):
+            status, _, payload = self._request_json(
+                "/api/admin/manual-downloads/youtube",
+                method="POST",
+                body={"url": "https://youtu.be/abc123"},
+                cookie=self.manager_cookie,
+            )
+
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["ok"])
+        download = payload["download"]
+        self.assertEqual(download["title"], "Manual Song")
+        self.assertEqual(download["uploader"], "Manual Channel")
+        self.assertEqual(download["duration_seconds"], 123)
+        self.assertIn("/api/admin/manual-downloads/download?id=", download["download_url"])
+
+        status, _, list_payload = self._request_json("/api/admin/manual-downloads", cookie=self.manager_cookie)
+        self.assertEqual(status, 200)
+        self.assertEqual(len(list_payload["items"]), 1)
+        self.assertEqual(list_payload["items"][0]["title"], "Manual Song")
+
+        download_id = int(download["id"])
+        status, headers, raw = self._request(
+            f"/api/admin/manual-downloads/download?id={download_id}",
+            cookie=self.manager_cookie,
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(raw, b"manual-track")
+        self.assertIn("audio/mpeg", headers.get("Content-Type", ""))
+
+        with self.db.session() as conn:
+            row = conn.execute("SELECT * FROM manual_downloads WHERE id = ?", (download_id,)).fetchone()
+            self.assertIsNotNone(row)
+            self.assertEqual(str(row["source_url"]), "https://youtu.be/abc123")
+            audit = conn.execute(
+                "SELECT action, detail FROM audit_logs WHERE action = 'manual_youtube_download' ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+            self.assertIsNotNone(audit)
+            self.assertIn('"video_id": "abc123"', str(audit["detail"]))
 
     def test_admin_close_status_reads_persisted_round_state(self) -> None:
         with self.db.session() as conn:
@@ -222,6 +409,8 @@ class AdminApiTest(unittest.TestCase):
         self.assertEqual(artifact["id"], self.artifact_id)
         self.assertTrue(artifact["has_m3u"])
         self.assertTrue(artifact["has_mp3"])
+        self.assertEqual(len(artifact["tracks"]), 1)
+        self.assertEqual(artifact["tracks"][0]["title"], "Visible Song")
         self.assertNotIn("m3u_path", artifact)
         self.assertNotIn("mp3_path", artifact)
         self.assertNotIn("generation_log", artifact)
@@ -260,6 +449,64 @@ class AdminApiTest(unittest.TestCase):
             self.assertIsNotNone(audit)
             self.assertIn(f'"user_id": {self.member_user_id}', audit["detail"])
 
+    def test_non_super_admin_can_approve_but_cannot_revoke_admin(self) -> None:
+        status, _, payload = self._request_json("/api/me", cookie=self.manager_cookie)
+        self.assertEqual(status, 200)
+        self.assertFalse(payload["user"]["is_super_admin"])
+
+        status, _, payload = self._request_json(
+            "/api/admin/users/approve",
+            method="POST",
+            body={"user_id": self.member_user_id, "approved": True},
+            cookie=self.manager_cookie,
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["approved"])
+
+        status, _, payload = self._request_json(
+            "/api/admin/users/approve",
+            method="POST",
+            body={"user_id": self.member_user_id, "approved": False},
+            cookie=self.manager_cookie,
+        )
+        self.assertEqual(status, 403)
+        self.assertEqual(payload["error"], "super-admin-required")
+
+        with self.db.session() as conn:
+            row = conn.execute("SELECT is_admin_approved FROM users WHERE id = ?", (self.member_user_id,)).fetchone()
+            self.assertEqual(int(row["is_admin_approved"]), 1)
+
+        status, _, payload = self._request_json(
+            "/api/admin/users/approve",
+            method="POST",
+            body={"user_id": self.member_user_id, "approved": False},
+            cookie=self.admin_cookie,
+        )
+        self.assertEqual(status, 200)
+        self.assertFalse(payload["approved"])
+
+        with self.db.session() as conn:
+            row = conn.execute("SELECT is_admin_approved FROM users WHERE id = ?", (self.member_user_id,)).fetchone()
+            self.assertEqual(int(row["is_admin_approved"]), 0)
+
+    def test_super_admin_cannot_revoke_other_super_admin(self) -> None:
+        with self.db.session() as conn:
+            protected_user_id = self._insert_user(conn, "admin2", "보호관리자", True)
+        self.ctx.cfg = replace(self.ctx.cfg, super_admin_ids=("admin", "admin2"))
+
+        status, _, payload = self._request_json(
+            "/api/admin/users/approve",
+            method="POST",
+            body={"user_id": protected_user_id, "approved": False},
+            cookie=self.admin_cookie,
+        )
+        self.assertEqual(status, 403)
+        self.assertEqual(payload["error"], "super-admin-protected")
+
+        with self.db.session() as conn:
+            row = conn.execute("SELECT is_admin_approved FROM users WHERE id = ?", (protected_user_id,)).fetchone()
+            self.assertEqual(int(row["is_admin_approved"]), 1)
+
     def test_admin_hide_submission_is_disabled(self) -> None:
         status, _, payload = self._request_json(
             "/api/admin/submissions/hide",
@@ -291,8 +538,27 @@ class AdminApiTest(unittest.TestCase):
             cookie=self.admin_cookie,
         )
         self.assertEqual(status, 200)
-        self.assertIn('attachment; filename="3_-playlist.m3u"', headers["Content-Disposition"])
-        self.assertIn("filename*=UTF-8''3%EC%9B%94-playlist.m3u", headers["Content-Disposition"])
+        self.assertIn('attachment; filename="3_-1__-playlist.m3u"', headers["Content-Disposition"])
+        self.assertIn("filename*=UTF-8''3%EC%9B%94-1%ED%9A%8C%EC%B0%A8-playlist.m3u", headers["Content-Disposition"])
+        self.assertIn(b"#EXTM3U", raw)
+
+    def test_admin_artifact_download_uses_local_month_for_utc_boundary_round(self) -> None:
+        with self.db.session() as conn:
+            conn.execute(
+                "UPDATE rounds SET cadence = 'monthly', start_at = ?, end_at = ?, created_at = ? WHERE id = ?",
+                ("2026-02-28T15:00:00Z", "2026-03-31T15:00:00Z", "2026-03-01T00:00:00Z", self.round_id),
+            )
+            conn.execute(
+                "UPDATE round_artifacts SET created_at = ? WHERE id = ?",
+                ("2026-03-30T12:00:00Z", self.artifact_id),
+            )
+
+        status, headers, raw = self._request(
+            f"/api/admin/artifacts/download?artifact_id={self.artifact_id}&type=m3u",
+            cookie=self.admin_cookie,
+        )
+        self.assertEqual(status, 200)
+        self.assertIn("filename*=UTF-8''3%EC%9B%94-1%ED%9A%8C%EC%B0%A8-playlist.m3u", headers["Content-Disposition"])
         self.assertIn(b"#EXTM3U", raw)
 
     def test_admin_artifact_download_rejects_out_of_root_files(self) -> None:
@@ -310,6 +576,30 @@ class AdminApiTest(unittest.TestCase):
         self.assertEqual(status, 404)
         self.assertEqual(payload["error"], "artifact-file-missing")
 
+    def test_admin_artifact_track_download_validation_and_success(self) -> None:
+        status, _, payload = self._request_json("/api/admin/artifacts/download-track?artifact_id=1&track_id=1")
+        self.assertEqual(status, 401)
+        self.assertEqual(payload["error"], "auth-required")
+
+        status, _, payload = self._request_json("/api/admin/artifacts/download-track?artifact_id=bad&track_id=1", cookie=self.admin_cookie)
+        self.assertEqual(status, 400)
+        self.assertEqual(payload["error"], "invalid-artifact-download-request")
+
+        status, _, payload = self._request_json(
+            f"/api/admin/artifacts/download-track?artifact_id={self.artifact_id}&track_id=999",
+            cookie=self.admin_cookie,
+        )
+        self.assertEqual(status, 404)
+        self.assertEqual(payload["error"], "artifact-track-not-found")
+
+        status, headers, raw = self._request(
+            f"/api/admin/artifacts/download-track?artifact_id={self.artifact_id}&track_id=1",
+            cookie=self.admin_cookie,
+        )
+        self.assertEqual(status, 200)
+        self.assertIn('attachment; filename="3_-1__-01-Visible Artist-Visible Song.mp3"', headers["Content-Disposition"])
+        self.assertIn(b"fake-track", raw)
+
     def test_public_results_redacts_private_artifact_fields(self) -> None:
         status, _, payload = self._request_json(f"/api/public/results?round_id={self.round_id}")
         self.assertEqual(status, 200)
@@ -318,6 +608,80 @@ class AdminApiTest(unittest.TestCase):
         self.assertNotIn("m3u_path", payload["artifact"])
         self.assertNotIn("mp3_path", payload["artifact"])
         self.assertNotIn("generation_log", payload["artifact"])
+
+    def test_submission_rejects_non_http_urls(self) -> None:
+        status, _, payload = self._request_json(
+            "/api/submissions",
+            method="POST",
+            body={
+                "track_id": "itunes:xss-1",
+                "title": "safe title",
+                "artist": "safe artist",
+                "album_art_url": "javascript:alert(1)",
+                "external_url": "https://example.com/song",
+            },
+            cookie=self.member_cookie,
+        )
+        self.assertEqual(status, 400)
+        self.assertEqual(payload["error"], "invalid-song-payload")
+
+    def test_html_and_json_responses_include_security_headers(self) -> None:
+        status, headers, raw = self._request("/")
+        self.assertEqual(status, 200)
+        self.assertEqual(headers.get("X-Content-Type-Options"), "nosniff")
+        self.assertEqual(headers.get("X-Frame-Options"), "DENY")
+        self.assertEqual(headers.get("Referrer-Policy"), "same-origin")
+        csp = headers.get("Content-Security-Policy", "")
+        self.assertIn("default-src 'self'", csp)
+        self.assertIn("script-src 'self' 'nonce-", csp)
+        self.assertNotIn("script-src 'self' 'unsafe-inline'", csp)
+        html = raw.decode("utf-8")
+        self.assertIn("<script nonce=", html)
+
+        status, headers, payload = self._request_json("/api/health")
+        self.assertEqual(status, 200)
+        self.assertEqual(payload, {"ok": True})
+        self.assertEqual(headers.get("X-Content-Type-Options"), "nosniff")
+        self.assertEqual(headers.get("X-Frame-Options"), "DENY")
+        self.assertEqual(headers.get("Referrer-Policy"), "same-origin")
+
+    def test_state_changing_requests_reject_cross_origin_headers(self) -> None:
+        status, _, payload = self._request_json(
+            "/api/submissions",
+            method="POST",
+            body={
+                "track_id": "itunes:csrf-1",
+                "title": "csrf song",
+                "artist": "csrf artist",
+                "album_art_url": "https://example.com/art.jpg",
+                "external_url": "https://example.com/song",
+            },
+            cookie=self.member_cookie,
+            extra_headers={"Origin": "https://evil.example"},
+        )
+        self.assertEqual(status, 403)
+        self.assertEqual(payload["error"], "invalid-origin")
+
+        status, _, payload = self._request_json(
+            "/api/votes",
+            method="PUT",
+            body={"submission_ids": [self.visible_submission_id]},
+            cookie=self.member_cookie,
+            extra_headers={"Referer": "https://evil.example/attack"},
+        )
+        self.assertEqual(status, 403)
+        self.assertEqual(payload["error"], "invalid-origin")
+
+    def test_state_changing_requests_allow_same_origin_headers(self) -> None:
+        status, _, payload = self._request_json(
+            "/api/auth/logout",
+            method="POST",
+            body={},
+            cookie=self.member_cookie,
+            extra_headers={"Origin": self.base_url},
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["ok"])
 
     def test_admin_close_round_starts_async_and_reports_success(self) -> None:
         release = threading.Event()
@@ -448,6 +812,33 @@ class AdminApiTest(unittest.TestCase):
                 )
                 self.assertEqual(status, 500)
                 self.assertNotIn("secret-put", json.dumps(payload, ensure_ascii=False))
+
+    def test_public_songs_supports_recent_sort_and_rejects_invalid_sort(self) -> None:
+        with self.db.session() as conn:
+            conn.execute("DELETE FROM votes WHERE round_id = ?", (self.round_id,))
+            conn.execute("DELETE FROM submissions WHERE round_id = ?", (self.round_id,))
+            first_id = self._insert_submission(conn, "itunes:sort-1", "Older Song", "Artist", self.member_user_id, False)
+            second_id = self._insert_submission(conn, "itunes:sort-2", "Newer Song", "Artist", self.other_user_id, False)
+            conn.execute("UPDATE submissions SET submitted_at = ? WHERE id = ?", ("2026-03-10T00:00:00Z", first_id))
+            conn.execute("UPDATE submissions SET submitted_at = ? WHERE id = ?", ("2026-03-11T00:00:00Z", second_id))
+            conn.execute(
+                "INSERT INTO votes(round_id, user_id, submission_id, voted_at) VALUES (?, ?, ?, ?)",
+                (self.round_id, self.admin_user_id, first_id, utc_now_iso()),
+            )
+
+        status, _, payload = self._request_json("/api/public/songs?sort=popular")
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["sort"], "popular")
+        self.assertEqual([item["title"] for item in payload["items"][:2]], ["Older Song", "Newer Song"])
+
+        status, _, payload = self._request_json("/api/public/songs?sort=recent")
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["sort"], "recent")
+        self.assertEqual([item["title"] for item in payload["items"][:2]], ["Newer Song", "Older Song"])
+
+        status, _, payload = self._request_json("/api/public/songs?sort=random")
+        self.assertEqual(status, 400)
+        self.assertEqual(payload["error"], "invalid-song-sort")
 
 
 if __name__ == "__main__":

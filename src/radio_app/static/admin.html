@@ -38,6 +38,16 @@
       gap: 12px;
     }
 
+    .site-footer {
+      width: min(1180px, calc(100vw - 28px));
+      margin: 4px auto 14px;
+      padding: 0 4px;
+      text-align: center;
+      color: #6c8878;
+      font-size: 11px;
+      letter-spacing: 0.02em;
+    }
+
     .topbar,
     .hero,
     .panel {
@@ -510,6 +520,11 @@
       .inline {
         grid-template-columns: 1fr;
       }
+      .site-footer {
+        width: min(100vw - 20px, 1180px);
+        margin-bottom: 10px;
+        font-size: 10px;
+      }
 
       .audit-scroll {
         max-height: 320px;
@@ -525,15 +540,15 @@
         <a href="/">메인</a>
         <a href="/submit">신청</a>
         <a href="/vote">투표</a>
-        <button type="button" class="mini-btn" onclick="refreshAll()">새로고침</button>
-        <button type="button" class="mini-btn" onclick="logout()">로그아웃</button>
+        <button id="refreshAllBtn" type="button" class="mini-btn">새로고침</button>
+        <button id="logoutBtn" type="button" class="mini-btn">로그아웃</button>
       </div>
     </section>
 
     <section class="hero">
       <div>
         <h1>방송부 운영 콘솔</h1>
-        <p class="muted">승인, 신청곡 관리, 월 설정, 마감, 아티팩트 다운로드, 로그 확인을 한 화면에서 처리합니다.</p>
+        <p class="muted">승인, 신청곡 관리, 회차 설정, 회차 마감, 아티팩트 다운로드, 로그 확인을 한 화면에서 처리합니다.</p>
       </div>
       <section class="summary-grid" aria-label="운영 요약">
         <article class="summary-card">
@@ -542,7 +557,7 @@
           <div class="muted">현재 관리자 권한 보유 계정 수</div>
         </article>
         <article class="summary-card">
-          <div class="summary-label">이번 달 신청</div>
+          <div class="summary-label">이번 회차 신청</div>
           <div class="summary-value" id="summarySubmissions">-</div>
           <div class="muted">현재 진행 중인 신청곡 수</div>
         </article>
@@ -564,10 +579,10 @@
         <div class="panel-head">
           <div>
             <h2 id="settings-title">기본 설정</h2>
-            <p class="muted">새로 열리는 월의 기본 규칙을 관리합니다.</p>
+            <p class="muted">새로 열리는 회차의 기본 규칙을 관리합니다.</p>
           </div>
           <div class="panel-actions">
-            <button type="button" class="secondary chip-btn" onclick="loadSettings()">불러오기</button>
+            <button id="loadSettingsBtn" type="button" class="secondary chip-btn">불러오기</button>
           </div>
         </div>
 
@@ -579,15 +594,9 @@
               <option value="weekly">weekly</option>
             </select>
           </div>
-          <div class="inline">
-            <div>
-              <label for="playlistSize">기본 곡 수</label>
-              <input id="playlistSize" type="number" min="1" max="100" />
-            </div>
-            <div>
-              <label for="targetSeconds">목표 초</label>
-              <input id="targetSeconds" type="number" min="60" max="10800" />
-            </div>
+          <div>
+            <label for="targetSeconds">목표 초</label>
+            <input id="targetSeconds" type="number" min="60" max="10800" />
           </div>
           <label class="checkbox">
             <input id="loudnorm" type="checkbox" />
@@ -596,7 +605,7 @@
         </div>
 
         <div class="panel-actions">
-          <button type="button" onclick="saveSettings()">설정 저장</button>
+          <button id="saveSettingsBtn" type="button">설정 저장</button>
         </div>
         <div class="status-box" id="settingsStatus" aria-live="polite">저장된 기본값을 불러오는 중입니다.</div>
       </article>
@@ -605,21 +614,21 @@
         <div class="panel-head">
           <div>
             <h2 id="close-title">수동 마감</h2>
-            <p class="muted">현재 open 상태의 월을 즉시 마감하고 결과 아티팩트를 생성합니다.</p>
+            <p class="muted">현재 open 상태의 회차를 즉시 마감하고 결과 아티팩트를 생성합니다.</p>
           </div>
         </div>
         <div class="note">
           마감 후 최신 아티팩트와 운영 로그를 자동으로 새로고침합니다. 예상치 못한 실패는 브라우저에 내부 오류를 노출하지 않고 로그로 남깁니다.
         </div>
         <div class="panel-actions">
-          <button type="button" class="warn" id="closeButton" onclick="manualClose()">현재 월 마감 실행</button>
+          <button type="button" class="warn" id="closeButton">현재 회차 마감 실행</button>
         </div>
-        <div class="muted" id="closeHint">현재 월 마감 중에는 다시 누를 수 없습니다.</div>
+        <div class="muted" id="closeHint">현재 회차 마감 중에는 다시 누를 수 없습니다.</div>
         <div class="progress-card" id="closeProgress" hidden>
           <div class="progress-head">
             <div class="progress-title">
               <strong id="closePhase">대기 중</strong>
-              <span class="muted" id="closeStageMessage">월 마감 시작 전입니다.</span>
+              <span class="muted" id="closeStageMessage">회차 마감 시작 전입니다.</span>
             </div>
             <span class="badge" id="closeStateBadge">IDLE</span>
           </div>
@@ -628,7 +637,7 @@
           </div>
           <div class="progress-meta">
             <span id="closeProgressPercent">0%</span>
-            <span id="closeProgressRound">대상 월 -</span>
+            <span id="closeProgressRound">대상 회차 -</span>
           </div>
         </div>
         <div class="status-box" id="closeStatus" aria-live="polite">아직 실행하지 않았습니다.</div>
@@ -641,7 +650,7 @@
             <p class="muted">로그인한 계정 목록에서 관리자 권한을 부여하거나 회수합니다.</p>
           </div>
           <div class="panel-actions">
-            <button type="button" class="secondary chip-btn" onclick="loadUsers()">목록 새로고침</button>
+            <button id="loadUsersBtn" type="button" class="secondary chip-btn">목록 새로고침</button>
           </div>
         </div>
         <div class="status-box" id="usersStatus" aria-live="polite">계정 목록을 불러오는 중입니다.</div>
@@ -652,10 +661,10 @@
         <div class="panel-head">
           <div>
             <h2 id="submissions-title">현재 신청곡 관리</h2>
-            <p class="muted">현재 월 신청곡과 투표 수를 읽기 전용으로 확인합니다.</p>
+            <p class="muted">현재 회차 신청곡과 투표 수를 읽기 전용으로 확인합니다.</p>
           </div>
           <div class="panel-actions">
-            <button type="button" class="secondary chip-btn" onclick="loadSubmissions()">목록 새로고침</button>
+            <button id="loadSubmissionsBtn" type="button" class="secondary chip-btn">목록 새로고침</button>
           </div>
         </div>
         <div class="status-box" id="submissionsStatus" aria-live="polite">신청곡 목록을 불러오는 중입니다.</div>
@@ -669,10 +678,39 @@
             <p class="muted">가장 최근 생성된 재생목록과 합본 음원을 바로 내려받습니다.</p>
           </div>
           <div class="panel-actions">
-            <button type="button" class="secondary chip-btn" onclick="loadArtifact()">불러오기</button>
+            <button id="loadArtifactBtn" type="button" class="secondary chip-btn">불러오기</button>
           </div>
         </div>
         <div class="status-box" id="artifactStatus" aria-live="polite">아티팩트를 불러오는 중입니다.</div>
+      </article>
+
+      <article class="panel" aria-labelledby="maintenance-title" id="maintenancePanel" hidden>
+        <div class="panel-head">
+          <div>
+            <h2 id="maintenance-title">유지보수</h2>
+            <p class="muted">관리자면 서버 가상환경의 `yt-dlp` 버전을 확인하고 업데이트할 수 있습니다.</p>
+          </div>
+          <div class="panel-actions">
+            <button id="reloadYtDlpBtn" type="button" class="secondary chip-btn">최신 버전 확인</button>
+            <button id="updateYtDlpBtn" type="button" class="warn chip-btn">yt-dlp 업데이트</button>
+          </div>
+        </div>
+        <div class="status-box" id="maintenanceStatus" aria-live="polite">현재/최신 버전을 확인하는 중입니다.</div>
+        <div class="note">
+          <strong>유튜브 링크 직접 다운로드</strong><br />
+          회차 선정과 별개로 특정 유튜브 링크를 mp3로 받아서 바로 내려받을 수 있습니다.
+        </div>
+        <div class="inline">
+          <div>
+            <label for="manualYoutubeUrl">유튜브 링크</label>
+            <input id="manualYoutubeUrl" type="url" placeholder="https://youtu.be/..." />
+          </div>
+          <div style="display:flex; align-items:end;">
+            <button id="manualYoutubeDownloadBtn" type="button">직접 다운로드</button>
+          </div>
+        </div>
+        <div class="status-box" id="manualYoutubeStatus" aria-live="polite">최근 수동 다운로드 목록을 불러오는 중입니다.</div>
+        <div class="list" id="manualDownloadsList"></div>
       </article>
 
       <article class="panel audit-panel" aria-labelledby="audit-title">
@@ -682,7 +720,7 @@
             <p class="muted">최근 승인, 숨김, 설정 저장, 마감 기록을 확인합니다.</p>
           </div>
           <div class="panel-actions">
-            <button type="button" class="secondary chip-btn" onclick="loadAuditLogs()">새로고침</button>
+            <button id="loadAuditLogsBtn" type="button" class="secondary chip-btn">새로고침</button>
           </div>
         </div>
         <div class="status-box" id="auditStatus" aria-live="polite">운영 로그를 불러오는 중입니다.</div>
@@ -690,29 +728,23 @@
           <div class="list audit-list" id="auditList"></div>
         </div>
       </article>
-
-      <article class="panel full" aria-labelledby="ops-title">
-        <div class="panel-head">
-          <div>
-            <h2 id="ops-title">운영 메모</h2>
-            <p class="muted">잠금 복구와 초기 관리자 부여는 UI가 아니라 운영 절차로 유지합니다.</p>
-          </div>
-        </div>
-        <div class="note">
-          1) 첫 관리자 부여와 관리자 전원 잠금 복구는 README의 break-glass 절차로만 처리합니다.<br />
-          2) 신청곡 목록은 현재 읽기 전용이며, 곡 숨김 처리는 비활성화되어 있습니다.<br />
-          3) 아티팩트는 관리자 인증된 다운로드만 허용되며 서버 내부 경로는 화면에 노출하지 않습니다.
-        </div>
-      </article>
     </section>
   </main>
 
-  <script>
+  <footer class="site-footer">Copyright © ISHS 32nd 엄지오</footer>
+
+  <script nonce="__CSP_NONCE__">
     let cachedUsers = [];
     let cachedSubmissions = [];
     let cachedArtifact = null;
     let closePollTimer = null;
     let closePollBusy = false;
+    let currentUserIsSuperAdmin = false;
+    let maintenanceCapabilities = {
+      updateEnabled: true,
+      manualDownloadEnabled: true,
+      activeJob: null
+    };
 
     async function api(path, method = "GET", body = null) {
       const res = await fetch(path, {
@@ -751,7 +783,7 @@
       if (!value) return "-";
       const d = new Date(value);
       if (Number.isNaN(d.getTime())) return "-";
-      return `${d.getMonth() + 1}월`;
+      return `${d.getMonth() + 1}월 1회차`;
     }
 
     function setStatus(id, message, variant = "") {
@@ -775,12 +807,11 @@
     function renderSettings(data, sourceLabel = "현재 저장값") {
       const defaults = data.defaults || {};
       document.getElementById("cadence").value = defaults.cadence || "monthly";
-      document.getElementById("playlistSize").value = defaults.playlist_size ?? 12;
       document.getElementById("targetSeconds").value = defaults.target_seconds ?? 2400;
       document.getElementById("loudnorm").checked = Boolean(defaults.loudnorm_enabled);
       setStatus(
         "settingsStatus",
-        `<strong>${escapeHtml(sourceLabel)}</strong><br />주기 ${escapeHtml(defaults.cadence)} / 기본 ${escapeHtml(defaults.playlist_size)}곡 / 목표 ${escapeHtml(defaults.target_seconds)}초`,
+        `<strong>${escapeHtml(sourceLabel)}</strong><br />주기 ${escapeHtml(defaults.cadence)} / 목표 ${escapeHtml(defaults.target_seconds)}초`,
         "success"
       );
     }
@@ -794,23 +825,35 @@
       }
       setListHtml(
         "usersList",
-        users.map((user) => `
-          <article class="list-card">
-            <div class="row">
-              <div class="title-line">
-                <strong>${escapeHtml(user.display_name)}</strong>
-                <div class="meta">
-                  <span>${escapeHtml(user.riro_user_key)}</span>
-                  <span>생성 ${escapeHtml(formatDateTime(user.created_at))}</span>
+        users.map((user) => {
+          const canToggleAdmin = !user.is_admin_approved || (currentUserIsSuperAdmin && !user.is_super_admin);
+          return `
+            <article class="list-card">
+              <div class="row">
+                <div class="title-line">
+                  <strong>${escapeHtml(user.display_name)}</strong>
+                  <div class="meta">
+                    <span>${escapeHtml(user.riro_user_key)}</span>
+                    <span>생성 ${escapeHtml(formatDateTime(user.created_at))}</span>
+                  </div>
+                </div>
+                <div class="pill-row">
+                  <span class="badge${user.is_admin_approved ? "" : " warn"}">${user.is_admin_approved ? "관리자" : "일반 계정"}</span>
+                  ${user.is_super_admin ? '<span class="badge">슈퍼관리자</span>' : ""}
+                  ${canToggleAdmin ? `
+                  <button
+                    type="button"
+                    class="chip-btn ${user.is_admin_approved ? "danger" : "secondary"}"
+                    data-action="toggle-admin"
+                    data-user-id="${escapeHtml(user.id)}"
+                    data-approved="${user.is_admin_approved ? "false" : "true"}"
+                  >${user.is_admin_approved ? "권한 회수" : "관리자 승인"}</button>
+                  ` : ""}
                 </div>
               </div>
-              <div class="pill-row">
-                <span class="badge${user.is_admin_approved ? "" : " warn"}">${user.is_admin_approved ? "관리자" : "일반 계정"}</span>
-                <button type="button" class="chip-btn ${user.is_admin_approved ? "danger" : "secondary"}" onclick="toggleAdmin(${user.id}, ${user.is_admin_approved ? "false" : "true"})">${user.is_admin_approved ? "권한 회수" : "관리자 승인"}</button>
-              </div>
-            </div>
-          </article>
-        `).join("")
+            </article>
+          `;
+        }).join("")
       );
     }
 
@@ -818,7 +861,7 @@
       cachedSubmissions = items;
       setSummaryCounts();
       if (!items.length) {
-        setListHtml("submissionsList", '<div class="empty">현재 월에 신청된 곡이 없습니다.</div>');
+        setListHtml("submissionsList", '<div class="empty">현재 회차에 신청된 곡이 없습니다.</div>');
         return;
       }
       setListHtml(
@@ -851,23 +894,39 @@
         return;
       }
       const buttons = [];
+      const trackButtons = [];
       if (artifact.has_m3u) {
-        buttons.push(`<button type="button" class="secondary" onclick="downloadArtifact(${artifact.id}, 'm3u')">M3U 다운로드</button>`);
+        buttons.push(
+          `<button type="button" class="secondary" data-action="download-artifact" data-artifact-id="${escapeHtml(artifact.id)}" data-artifact-type="m3u">M3U 다운로드</button>`
+        );
       }
       if (artifact.has_mp3) {
-        buttons.push(`<button type="button" onclick="downloadArtifact(${artifact.id}, 'mp3')">MP3 다운로드</button>`);
+        buttons.push(
+          `<button type="button" data-action="download-artifact" data-artifact-id="${escapeHtml(artifact.id)}" data-artifact-type="mp3">MP3 다운로드</button>`
+        );
+      }
+      if (Array.isArray(artifact.tracks)) {
+        for (const track of artifact.tracks) {
+          trackButtons.push(
+            `<button type="button" class="secondary" data-action="download-track" data-artifact-id="${escapeHtml(artifact.id)}" data-track-id="${escapeHtml(track.track_id)}">${escapeHtml(track.track_id)}. ${escapeHtml(track.artist)} - ${escapeHtml(track.title)}</button>`
+          );
+        }
       }
       setStatus(
         "artifactStatus",
         `
-          <div class="kv">
-            <div class="k">대상 월</div><div class="v">${escapeHtml(monthLabelFromIso(artifact.start_at))}</div>
+            <div class="kv">
+            <div class="k">대상 회차</div><div class="v">${escapeHtml(artifact.round_label || monthLabelFromIso(artifact.start_at))}</div>
             <div class="k">주기</div><div class="v">${escapeHtml(artifact.cadence)}</div>
             <div class="k">총 길이</div><div class="v">${escapeHtml(artifact.total_seconds)}초</div>
             <div class="k">생성 시각</div><div class="v">${escapeHtml(formatDateTime(artifact.created_at))}</div>
             <div class="k">요약</div><div class="v">${escapeHtml(artifact.generation_summary || "생성 완료")}</div>
           </div>
           <div class="panel-actions" style="margin-top:10px;">${buttons.join("") || '<span class="muted">내려받을 파일이 없습니다.</span>'}</div>
+          <div style="margin-top:12px;">
+            <strong>선정곡 개별 다운로드</strong>
+            <div class="panel-actions" style="margin-top:8px;">${trackButtons.join("") || '<span class="muted">저장된 개별 음원이 없습니다.</span>'}</div>
+          </div>
         `,
         "success"
       );
@@ -894,18 +953,26 @@
         return `${parsed.title || "-"} / ${parsed.confidence || "-"} / score ${parsed.score ?? "-"}`;
       }
       if (item.action === "settings_updated" && parsed) {
-        return `주기 ${parsed.cadence || "-"} / ${parsed.playlist_size ?? "-"}곡 / ${parsed.target_seconds ?? "-"}초`;
+        return `주기 ${parsed.cadence || "-"} / ${parsed.target_seconds ?? "-"}초`;
+      }
+      if (item.action === "yt_dlp_updated" && parsed) {
+        return `yt-dlp ${parsed.before_version || "-"} → ${parsed.after_version || "-"}${parsed.changed ? "" : " (변경 없음)"}`;
+      }
+      if (item.action === "yt_dlp_update_failed" && parsed) {
+        return `yt-dlp 업데이트 실패: ${parsed.summary || parsed.error || "-"}`;
       }
       if (item.action === "admin_approval_changed" && parsed) {
         return `user ${parsed.user_id ?? "-"} → ${parsed.approved ? "관리자 승인" : "권한 회수"}`;
       }
       if (item.action === "retention_cleanup" && parsed) {
-        return `uploads ${parsed.deleted_audio_assets ?? 0}건 / artifacts ${parsed.deleted_artifacts ?? 0}건 정리`;
+        return `uploads ${parsed.deleted_audio_assets ?? 0}건 / artifacts ${parsed.deleted_round_artifacts ?? parsed.deleted_artifacts ?? 0}건 / logs ${parsed.audit_logs_deleted ?? 0}건 정리`;
       }
       return String(item.detail || "-");
     }
 
     function auditBadgeClass(item) {
+      if (item.action === "yt_dlp_update_failed") return "danger";
+      if (item.action === "yt_dlp_updated") return "";
       if (item.action === "close_failed") return "danger";
       if (item.action === "manual_close" || item.action === "youtube_audio_selected") return "";
       return "warn";
@@ -945,6 +1012,24 @@
       setStatus(statusId, escapeHtml(message), "error");
     }
 
+    function applyMaintenanceCapabilities() {
+      const updateBtn = document.getElementById("updateYtDlpBtn");
+      const reloadBtn = document.getElementById("reloadYtDlpBtn");
+      const manualBtn = document.getElementById("manualYoutubeDownloadBtn");
+      const manualInput = document.getElementById("manualYoutubeUrl");
+      const busy = Boolean(maintenanceCapabilities.activeJob);
+
+      reloadBtn.disabled = busy;
+      updateBtn.disabled = busy || !maintenanceCapabilities.updateEnabled;
+      manualBtn.disabled = busy || !maintenanceCapabilities.manualDownloadEnabled;
+      manualInput.disabled = busy || !maintenanceCapabilities.manualDownloadEnabled;
+
+      if (!maintenanceCapabilities.manualDownloadEnabled) {
+        setListHtml("manualDownloadsList", '<div class="empty">유튜브 직접 다운로드가 비활성화되어 있습니다.</div>');
+        setStatus("manualYoutubeStatus", "유튜브 직접 다운로드가 비활성화되어 있습니다.", "warn");
+      }
+    }
+
     function closeStageText(stage) {
       const mapping = {
         preparing: "마감 준비",
@@ -976,9 +1061,9 @@
       badge.textContent = String(status).toUpperCase();
       badge.className = `badge${status === "failed" ? " danger" : status === "running" ? " warn" : ""}`;
       label.textContent = closeStageText(state?.stage);
-      message.textContent = state?.message || "월 마감 시작 전입니다.";
+      message.textContent = state?.message || "회차 마감 시작 전입니다.";
       percent.textContent = `${progress}%`;
-      round.textContent = `대상 월 ${state?.round_id ? `#${state.round_id}` : "-"}`;
+      round.textContent = `대상 회차 ${state?.round_id ? `#${state.round_id}` : "-"}`;
 
       if (status === "running") {
         setStatus("closeStatus", `${escapeHtml(closeStageText(state?.stage))} 단계 진행 중`, "running");
@@ -990,7 +1075,7 @@
           "success"
         );
       } else if (status === "failed") {
-        renderError("closeStatus", state?.error?.message || state?.message || "월 마감에 실패했습니다.");
+        renderError("closeStatus", state?.error?.message || state?.message || "회차 마감에 실패했습니다.");
       }
     }
 
@@ -1034,6 +1119,7 @@
         window.location.href = "/";
         throw new Error("admin-required");
       }
+      currentUserIsSuperAdmin = Boolean(data.user.is_super_admin);
     }
 
     async function logout() {
@@ -1057,7 +1143,6 @@
       try {
         const payload = {
           cadence: document.getElementById("cadence").value,
-          playlist_size: Number(document.getElementById("playlistSize").value),
           target_seconds: Number(document.getElementById("targetSeconds").value),
           loudnorm_enabled: document.getElementById("loudnorm").checked
         };
@@ -1098,6 +1183,10 @@
         setStatus("usersStatus", approved ? "관리자 승인이 반영되었습니다." : "관리자 권한 회수가 반영되었습니다.", "success");
         await Promise.all([loadUsers(), loadAuditLogs()]);
       } catch (err) {
+        if (err?.payload?.error === "super-admin-protected") {
+          renderError("usersStatus", "슈퍼관리자 계정은 권한 회수할 수 없습니다.");
+          return;
+        }
         renderError("usersStatus", err.message);
       }
     }
@@ -1121,8 +1210,170 @@
       }
     }
 
+    function renderMaintenanceStatus(data, sourceLabel = "현재 상태") {
+      maintenanceCapabilities = {
+        updateEnabled: Boolean(data.update_enabled),
+        manualDownloadEnabled: Boolean(data.manual_download_enabled),
+        activeJob: data.active_job || null
+      };
+      applyMaintenanceCapabilities();
+      const latestStatus = data.latest_check_error
+        ? `확인 실패 (${escapeHtml(data.latest_check_error)})`
+        : escapeHtml(data.latest_version || "-");
+      const activeJob = maintenanceCapabilities.activeJob
+        ? `${escapeHtml(maintenanceCapabilities.activeJob.kind || "-")} / ${escapeHtml(maintenanceCapabilities.activeJob.started_at || "-")}`
+        : "없음";
+      setStatus(
+        "maintenanceStatus",
+        `
+          <div class="kv">
+            <div class="k">상태</div><div class="v">${data.installed ? "설치됨" : "미설치"}</div>
+            <div class="k">현재 버전</div><div class="v">${escapeHtml(data.version || "-")}</div>
+            <div class="k">최신 버전</div><div class="v">${latestStatus}</div>
+            <div class="k">업데이트 필요</div><div class="v">${data.update_available ? "예" : "아니오"}</div>
+            <div class="k">업데이트 기능</div><div class="v">${maintenanceCapabilities.updateEnabled ? "활성" : "비활성"}</div>
+            <div class="k">직접 다운로드</div><div class="v">${maintenanceCapabilities.manualDownloadEnabled ? "활성" : "비활성"}</div>
+            <div class="k">실행 중 작업</div><div class="v">${activeJob}</div>
+            <div class="k">Python</div><div class="v">${escapeHtml(data.python || "-")}</div>
+            <div class="k">출처</div><div class="v">${escapeHtml(sourceLabel)}</div>
+          </div>
+        `,
+        "success"
+      );
+    }
+
+    async function loadYtDlpStatus() {
+      try {
+        const data = await api("/api/admin/maintenance/yt-dlp");
+        renderMaintenanceStatus(data);
+      } catch (err) {
+        renderError("maintenanceStatus", err.message);
+      }
+    }
+
+    async function updateYtDlp() {
+      if (!maintenanceCapabilities.updateEnabled) {
+        renderError("maintenanceStatus", "yt-dlp 업데이트 기능이 비활성화되어 있습니다.");
+        return;
+      }
+      const trigger = document.getElementById("updateYtDlpBtn");
+      const reloadBtn = document.getElementById("reloadYtDlpBtn");
+      trigger.disabled = true;
+      reloadBtn.disabled = true;
+      setStatus("maintenanceStatus", "yt-dlp 업데이트를 실행 중입니다.", "running");
+      try {
+        const data = await api("/api/admin/maintenance/yt-dlp/update", "POST", {});
+        setStatus(
+          "maintenanceStatus",
+          `
+            <strong>업데이트 완료</strong><br />
+            ${escapeHtml(data.before_version || "-")} → ${escapeHtml(data.after_version || "-")}
+            <br />${escapeHtml(data.summary || "-")}
+          `,
+          "success"
+        );
+        await loadAuditLogs();
+      } catch (err) {
+        if (err?.payload?.error === "maintenance-busy") {
+          await loadYtDlpStatus();
+        }
+        const summary = err?.payload?.summary ? `<br />${escapeHtml(err.payload.summary)}` : "";
+        setStatus("maintenanceStatus", `${escapeHtml(err.message)}${summary}`, "error");
+      } finally {
+        applyMaintenanceCapabilities();
+      }
+    }
+
+    function renderManualDownloads(items) {
+      if (!items.length) {
+        setListHtml("manualDownloadsList", '<div class="empty">아직 수동 다운로드 기록이 없습니다.</div>');
+        return;
+      }
+      setListHtml(
+        "manualDownloadsList",
+        items.map((item) => `
+          <article class="list-card">
+            <div class="row">
+              <div class="title-line">
+                <strong>${escapeHtml(item.title)}</strong>
+                <div class="meta">
+                  <span>${escapeHtml(item.uploader || "-")}</span>
+                  <span>${escapeHtml(item.duration_seconds ?? "-")}초</span>
+                  <span>${escapeHtml(formatDateTime(item.created_at))}</span>
+                </div>
+              </div>
+              <div class="pill-row">
+                <button
+                  type="button"
+                  class="secondary chip-btn"
+                  data-action="download-manual"
+                  data-manual-id="${escapeHtml(item.id)}"
+                >파일 다운로드</button>
+              </div>
+            </div>
+          </article>
+        `).join("")
+      );
+    }
+
+    async function loadManualDownloads() {
+      if (!maintenanceCapabilities.manualDownloadEnabled) {
+        applyMaintenanceCapabilities();
+        return;
+      }
+      try {
+        const data = await api("/api/admin/manual-downloads");
+        renderManualDownloads(data.items || []);
+        setStatus("manualYoutubeStatus", `최근 ${escapeHtml((data.items || []).length)}건을 표시 중입니다.`, "success");
+      } catch (err) {
+        renderError("manualYoutubeStatus", err.message);
+      }
+    }
+
+    function downloadManualFile(manualId) {
+      window.location.href = `/api/admin/manual-downloads/download?id=${encodeURIComponent(manualId)}`;
+    }
+
+    async function submitManualYoutubeDownload() {
+      if (!maintenanceCapabilities.manualDownloadEnabled) {
+        renderError("manualYoutubeStatus", "유튜브 직접 다운로드가 비활성화되어 있습니다.");
+        return;
+      }
+      const input = document.getElementById("manualYoutubeUrl");
+      const trigger = document.getElementById("manualYoutubeDownloadBtn");
+      const rawUrl = String(input.value || "").trim();
+      if (!rawUrl) {
+        renderError("manualYoutubeStatus", "유튜브 링크를 입력해 주세요.");
+        return;
+      }
+
+      trigger.disabled = true;
+      setStatus("manualYoutubeStatus", "유튜브 링크를 다운로드하는 중입니다.", "running");
+      try {
+        const data = await api("/api/admin/manual-downloads/youtube", "POST", { url: rawUrl });
+        input.value = "";
+        setStatus(
+          "manualYoutubeStatus",
+          `<strong>다운로드 완료</strong><br />${escapeHtml(data.download.title || "-")} / ${escapeHtml(data.download.duration_seconds ?? "-")}초`,
+          "success"
+        );
+        await Promise.all([loadManualDownloads(), loadAuditLogs()]);
+      } catch (err) {
+        if (err?.payload?.error === "maintenance-busy") {
+          await loadYtDlpStatus();
+        }
+        renderError("manualYoutubeStatus", err.message);
+      } finally {
+        applyMaintenanceCapabilities();
+      }
+    }
+
     function downloadArtifact(artifactId, type) {
       window.location.href = `/api/admin/artifacts/download?artifact_id=${encodeURIComponent(artifactId)}&type=${encodeURIComponent(type)}`;
+    }
+
+    function downloadTrack(artifactId, trackId) {
+      window.location.href = `/api/admin/artifacts/download-track?artifact_id=${encodeURIComponent(artifactId)}&track_id=${encodeURIComponent(trackId)}`;
     }
 
     async function loadAuditLogs() {
@@ -1136,6 +1387,7 @@
     }
 
     async function refreshAll() {
+      await loadYtDlpStatus();
       await Promise.allSettled([
         loadSettings(),
         loadUsers(),
@@ -1144,11 +1396,15 @@
         loadAuditLogs(),
         pollCloseStatus(false)
       ]);
+      if (maintenanceCapabilities.manualDownloadEnabled) {
+        await loadManualDownloads();
+      }
     }
 
     async function init() {
       try {
         await requireAdmin();
+        document.getElementById("maintenancePanel").hidden = false;
         await refreshAll();
         const closeState = await api("/api/admin/rounds/close-status");
         renderCloseState(closeState);
@@ -1161,6 +1417,46 @@
         }
       }
     }
+
+    document.getElementById("refreshAllBtn").addEventListener("click", refreshAll);
+    document.getElementById("logoutBtn").addEventListener("click", logout);
+    document.getElementById("loadSettingsBtn").addEventListener("click", loadSettings);
+    document.getElementById("saveSettingsBtn").addEventListener("click", saveSettings);
+    document.getElementById("closeButton").addEventListener("click", manualClose);
+    document.getElementById("loadUsersBtn").addEventListener("click", loadUsers);
+    document.getElementById("loadSubmissionsBtn").addEventListener("click", loadSubmissions);
+    document.getElementById("loadArtifactBtn").addEventListener("click", loadArtifact);
+    document.getElementById("loadAuditLogsBtn").addEventListener("click", loadAuditLogs);
+    document.getElementById("reloadYtDlpBtn").addEventListener("click", loadYtDlpStatus);
+    document.getElementById("updateYtDlpBtn").addEventListener("click", updateYtDlp);
+    document.getElementById("manualYoutubeDownloadBtn").addEventListener("click", submitManualYoutubeDownload);
+    document.getElementById("usersList").addEventListener("click", (event) => {
+      const target = event.target instanceof Element ? event.target.closest('[data-action="toggle-admin"]') : null;
+      if (!target) return;
+      const userId = Number(target.getAttribute("data-user-id"));
+      const approved = target.getAttribute("data-approved") === "true";
+      if (Number.isFinite(userId)) toggleAdmin(userId, approved);
+    });
+    document.getElementById("artifactStatus").addEventListener("click", (event) => {
+      const artifactTarget = event.target instanceof Element ? event.target.closest('[data-action="download-artifact"]') : null;
+      if (artifactTarget) {
+        const artifactId = Number(artifactTarget.getAttribute("data-artifact-id"));
+        const artifactType = String(artifactTarget.getAttribute("data-artifact-type") || "");
+        if (Number.isFinite(artifactId) && artifactType) downloadArtifact(artifactId, artifactType);
+        return;
+      }
+      const trackTarget = event.target instanceof Element ? event.target.closest('[data-action="download-track"]') : null;
+      if (!trackTarget) return;
+      const artifactId = Number(trackTarget.getAttribute("data-artifact-id"));
+      const trackId = Number(trackTarget.getAttribute("data-track-id"));
+      if (Number.isFinite(artifactId) && Number.isFinite(trackId)) downloadTrack(artifactId, trackId);
+    });
+    document.getElementById("manualDownloadsList").addEventListener("click", (event) => {
+      const target = event.target instanceof Element ? event.target.closest('[data-action="download-manual"]') : null;
+      if (!target) return;
+      const manualId = Number(target.getAttribute("data-manual-id"));
+      if (Number.isFinite(manualId)) downloadManualFile(manualId);
+    });
 
     init();
   </script>

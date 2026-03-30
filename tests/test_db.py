@@ -15,6 +15,21 @@ from radio_app.db import DB
 
 
 class DBMigrationTest(unittest.TestCase):
+    def test_connect_applies_sqlite_pragmas(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            db_path = Path(td) / "app.db"
+            db = DB(path=db_path, busy_timeout_ms=7000, journal_mode="WAL", synchronous="NORMAL")
+            db.init_schema()
+
+            with db.session() as conn:
+                journal_mode = str(conn.execute("PRAGMA journal_mode").fetchone()[0]).lower()
+                busy_timeout = int(conn.execute("PRAGMA busy_timeout").fetchone()[0])
+                synchronous = int(conn.execute("PRAGMA synchronous").fetchone()[0])
+
+            self.assertEqual(journal_mode, "wal")
+            self.assertEqual(busy_timeout, 7000)
+            self.assertEqual(synchronous, 1)
+
     def test_init_schema_adds_round_close_tracking_columns_to_legacy_db(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             db_path = Path(td) / "legacy.db"
@@ -44,6 +59,10 @@ class DBMigrationTest(unittest.TestCase):
 
             with db.session() as check_conn:
                 columns = {str(row["name"]) for row in check_conn.execute("PRAGMA table_info(rounds)").fetchall()}
+                artifact_track_columns = {
+                    str(row["name"])
+                    for row in check_conn.execute("PRAGMA table_info(round_artifact_tracks)").fetchall()
+                }
 
             self.assertTrue(
                 {
@@ -54,6 +73,19 @@ class DBMigrationTest(unittest.TestCase):
                     "close_finished_at",
                     "close_error",
                 }.issubset(columns)
+            )
+            self.assertTrue(
+                {
+                    "artifact_id",
+                    "submission_id",
+                    "song_id",
+                    "title",
+                    "artist",
+                    "file_path",
+                    "duration_seconds",
+                    "track_order",
+                    "created_at",
+                }.issubset(artifact_track_columns)
             )
 
 

@@ -107,9 +107,14 @@ python3 -m unittest discover -s tests -v
 | `RIRO_AUTH_MODE` | `riro` | `riro` or `mock` |
 | `RADIO_FFMPEG_PATH` | unset | explicit `ffmpeg` binary or bin dir |
 | `RADIO_SCHEDULER_INTERVAL_SECONDS` | `30` | background scheduler interval |
-| `RADIO_FILE_RETENTION_SECONDS` | `1800` | automatic deletion threshold |
+| `RADIO_FILE_RETENTION_SECONDS` | `86400` | automatic deletion threshold |
+| `RADIO_AUDIT_LOG_RETENTION_DAYS` | `30` | audit log retention window |
+| `RADIO_SQLITE_BUSY_TIMEOUT_MS` | `5000` | SQLite busy timeout |
+| `RADIO_SQLITE_JOURNAL_MODE` | `WAL` | SQLite journal mode |
+| `RADIO_SQLITE_SYNCHRONOUS` | `NORMAL` | SQLite synchronous mode |
 | `RADIO_YT_DLP_ENABLED` | `1` | YouTube auto-download on/off |
-| `RADIO_SESSION_COOKIE_SECURE` | `0` | add `Secure` to session cookie |
+| `RADIO_SESSION_COOKIE_SECURE` | `1` | add `Secure` to session cookie |
+| `RADIO_SUPER_ADMIN_IDS` | unset | comma-separated `riro_user_key` list allowed to revoke admin rights |
 
 ## Audio Pipeline
 - 검색은 iTunes Search API 사용
@@ -121,10 +126,12 @@ python3 -m unittest discover -s tests -v
 - 최종 선택 소스는 `audit_logs`에 `youtube_audio_selected`로 기록
 
 ## Retention Policy
-기본적으로 30분이 지나면 다음 항목을 자동 정리합니다.
+기본적으로 24시간이 지나면 다음 항목을 자동 정리합니다.
 - `uploads/` 아래 개별 음원 파일
 - `artifacts/` 아래 회차 결과 파일
 - 해당 파일과 연결된 `audio_assets`, `round_artifacts` DB row
+
+`audit_logs`는 기본적으로 30일 동안 보관하고, 이후 스케줄러가 오래된 로그를 정리합니다.
 
 자동 정리를 끄려면 다음처럼 실행합니다.
 
@@ -149,6 +156,22 @@ PY
 ```
 
 이 SQL 패턴은 임시 SQLite DB로 동작 확인했습니다.
+
+운영에서 관리자 권한 회수까지 열어둘 계정은 환경변수로 따로 지정합니다.
+
+```bash
+RADIO_SUPER_ADMIN_IDS=admin1,admin2
+```
+
+일반 관리자는 관리자 승인은 가능하지만, 관리자 권한 회수는 위 목록에 포함된 슈퍼관리자만 할 수 있습니다.
+슈퍼관리자 계정끼리는 서로 권한 회수를 할 수 없습니다.
+
+## Maintenance Notes
+관리자 화면의 `yt-dlp 업데이트` 버튼은 관리자면 실행할 수 있습니다. 다만 다음 조건이 맞아야 실제 업데이트가 성공합니다.
+
+- 서버에서 패키지 인덱스로 나갈 수 있는 네트워크
+- 현재 가상환경에 대한 쓰기 권한
+- `pip install -U yt-dlp` 실행 시간 동안 요청을 처리할 여유
 
 ## Testing
 ```bash
