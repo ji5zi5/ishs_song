@@ -2,7 +2,7 @@
 
 리로스쿨 로그인 기반으로 곡 신청, 투표, 회차 마감, 플레이리스트 아티팩트 생성을 처리하는 Python 웹 앱입니다.
 
-## What It Does
+## Features
 - 로그인한 사용자만 곡 신청과 투표 가능
 - 현재 월간 회차를 기본으로 운영하고, 관리자에서 주간으로 전환 가능
 - 회차당 신청 3곡, 투표 3곡 제한
@@ -10,7 +10,6 @@
 - 마감 시 `M3U`와 합본 `MP3` 생성
 - 누락된 음원은 YouTube 후보를 점수화해 `yt-dlp`로 자동 확보 시도
 - 관리자 화면에서 설정 변경, 수동 마감, 관리자 승인, 아티팩트 다운로드, 운영 로그 확인 가능
-- 수동 마감은 비동기 작업으로 실행되며, admin 패널에서 단계별 진행률과 실패 사유를 확인할 수 있음
 
 ## Requirements
 - Python 3.12+
@@ -21,33 +20,13 @@
 `ffmpeg`와 `ffprobe`가 없으면 서버가 시작되지 않습니다.
 
 ## Quick Start
-의존성 설치 명령은 이 문서 작성 중 다시 실행하지 않았습니다. 현재 워크스페이스에는 이미 설치된 상태였습니다.
-
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 ```
 
-로컬 개발에서는 mock 인증으로 실행하는 편이 안전합니다.
-
 ```bash
 RIRO_AUTH_MODE=mock RADIO_PORT=8092 python3 main.py
-```
-
-검증된 엔드포인트:
-- `http://127.0.0.1:8092/`
-- `http://127.0.0.1:8092/admin`
-- `http://127.0.0.1:8092/api/health`
-- `http://127.0.0.1:8092/api/public/current-round`
-
-## Verified Commands
-이 문서 기준으로 실제 실행 확인한 명령입니다.
-
-```bash
-RIRO_AUTH_MODE=mock RADIO_PORT=8092 python3 main.py
-curl -sS http://127.0.0.1:8092/api/health
-curl -sS http://127.0.0.1:8092/api/public/current-round
-python3 -m unittest discover -s tests -v
 ```
 
 ## Auth Modes
@@ -63,8 +42,6 @@ python3 -m unittest discover -s tests -v
 - `/submit` : 신청 화면
 - `/vote` : 투표 화면
 - `/admin` : 관리자 운영 화면
-
-관리자 승인 계정도 일반 사용자 페이지를 그대로 사용할 수 있고, 필요할 때만 `/admin`으로 이동하면 됩니다.
 
 ## Main API
 ### Public / User
@@ -89,9 +66,10 @@ python3 -m unittest discover -s tests -v
 - `POST /api/admin/rounds/close`
 - `GET /api/admin/artifacts/latest`
 - `GET /api/admin/artifacts/download?artifact_id=<id>&type=m3u|mp3`
+- `GET /api/admin/artifacts/download-track?artifact_id=<id>&track_id=<id>`
+- `GET /api/admin/manual-downloads`
+- `POST /api/admin/manual-downloads`
 - `GET /api/admin/audit-logs?limit=20`
-
-관리자 곡 숨김 API는 현재 비활성화되어 있고, 호출 시 `403 submission-hide-disabled`를 반환합니다.
 
 ## Environment Variables
 | Variable | Default | Meaning |
@@ -121,7 +99,7 @@ python3 -m unittest discover -s tests -v
 - 저장되는 `track_id`는 `itunes:<id>` 형식
 - 회차 마감 시 음원이 없는 곡은 YouTube 검색 후보를 최대 8개까지 비교
 - `Topic`, `official audio`, 업로더/제목 일치도에 가산점 부여
-- `live`, `cover`, `remix`, `karaoke`, `lyrics`, `shorts` 등에 감점 부여
+- `live`, `cover`, `remix`, `karaoke`, `shorts` 등에 감점 부여
 - 가능한 후보를 내려받아 `audio_assets`에 저장
 - 최종 선택 소스는 `audit_logs`에 `youtube_audio_selected`로 기록
 
@@ -140,7 +118,7 @@ RIRO_AUTH_MODE=mock RADIO_PORT=8093 RADIO_FILE_RETENTION_SECONDS=0 python3 main.
 ```
 
 ## Admin Bootstrap
-첫 관리자 부여와 전원 잠금 복구는 break-glass 절차로 DB에서 직접 처리합니다.
+첫 관리자는 DB에서 직접 올려야 합니다.
 
 ```bash
 python3 - <<'PY'
@@ -154,8 +132,6 @@ conn.commit()
 print("ok")
 PY
 ```
-
-이 SQL 패턴은 임시 SQLite DB로 동작 확인했습니다.
 
 운영에서 관리자 권한 회수까지 열어둘 계정은 환경변수로 따로 지정합니다.
 
@@ -178,5 +154,4 @@ RADIO_SUPER_ADMIN_IDS=admin1,admin2
 python3 -m unittest discover -s tests -v
 ```
 
-## More
 운영 절차와 장애 대응은 [docs/operations-guide.md](docs/operations-guide.md)를 참고하세요.
