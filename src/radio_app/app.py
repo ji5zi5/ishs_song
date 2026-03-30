@@ -1561,6 +1561,9 @@ class RadioHTTPRequestHandler(BaseHTTPRequestHandler):
             "latest_version": latest_version,
             "update_available": bool(version and latest_version and version != latest_version),
             "latest_check_error": latest_check_error,
+            "update_enabled": True,
+            "manual_download_enabled": True,
+            "active_job": None,
             "python": sys.executable,
         }
 

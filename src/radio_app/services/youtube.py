@@ -8,9 +8,10 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
 
-from radio_app.services.audio import validate_mp3_and_get_duration_seconds
+from radio_app.services.audio import merge_mp3_files, validate_mp3_and_get_duration_seconds
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +82,7 @@ NOISE_TOKENS = {
     "ft",
     "with",
 }
+MAX_MANUAL_PLAYLIST_ITEMS = 20
 
 
 @dataclass(frozen=True)
@@ -105,6 +107,45 @@ def _sanitize_filename(name: str) -> str:
     for ch in r'\/:*?"<>|':
         name = name.replace(ch, "_")
     return name.strip()[:120]
+
+
+def _is_playlist_url(url: str) -> bool:
+    parsed = urlparse(url)
+    if parsed.path.rstrip("/") == "/playlist":
+        return True
+    return bool(parse_qs(parsed.query).get("list"))
+
+
+def _new_downloaded_mp3s(output_dir: Path, existing_files: set[Path]) -> list[Path]:
+    return sorted(
+        (p for p in output_dir.glob("*.mp3") if p.resolve() not in existing_files),
+        key=lambda p: p.name,
+    )
+
+
+def _ordered_playlist_files(downloaded_files: list[Path], info: dict[str, Any]) -> list[Path]:
+    entries = [entry for entry in (info.get("entries") or []) if isinstance(entry, dict)]
+    if not entries:
+        return downloaded_files
+
+    remaining = list(downloaded_files)
+    ordered: list[Path] = []
+    for entry in entries:
+        entry_id = str(entry.get("id") or "").strip()
+        match = None
+        if entry_id:
+            suffix = f"-{entry_id}.mp3"
+            for path in remaining:
+                if path.name.endswith(suffix):
+                    match = path
+                    break
+        if match is None and remaining:
+            match = remaining[0]
+        if match is not None:
+            ordered.append(match)
+            remaining.remove(match)
+    ordered.extend(remaining)
+    return ordered
 
 
 def _split_query(query: str) -> tuple[str, str]:
@@ -381,8 +422,9 @@ def download_youtube_url(
 
     output_dir.mkdir(parents=True, exist_ok=True)
     file_stub = _sanitize_filename(f"manual-{uuid4().hex}")
-    output_template = str(output_dir / f"{file_stub}.%(ext)s")
+    output_template = str(output_dir / f"{file_stub}-%(playlist_index)s-%(id)s.%(ext)s")
     existing_files = {p.resolve() for p in output_dir.glob("*.mp3")}
+    playlist_requested = _is_playlist_url(url)
 
     ffmpeg_loc = ffmpeg_path or shutil.which("ffmpeg")
     ydl_opts: dict[str, Any] = {
@@ -390,7 +432,7 @@ def download_youtube_url(
         "outtmpl": output_template,
         "quiet": True,
         "no_warnings": True,
-        "noplaylist": True,
+        "noplaylist": not playlist_requested,
         "socket_timeout": 15,
         "retries": 2,
         "extractor_retries": 2,
@@ -402,6 +444,8 @@ def download_youtube_url(
             }
         ],
     }
+    if playlist_requested:
+        ydl_opts["playlistend"] = MAX_MANUAL_PLAYLIST_ITEMS
     if ffmpeg_loc:
         ydl_opts["ffmpeg_location"] = str(Path(ffmpeg_loc).parent)
 
@@ -410,21 +454,29 @@ def download_youtube_url(
         if info is None:
             raise RuntimeError(f"yt-dlp returned no info for url: {url}")
 
-    expected = output_dir / f"{file_stub}.mp3"
-    if expected.exists():
-        found = expected
-    else:
-        mp3_files = sorted(
-            (p for p in output_dir.glob("*.mp3") if p.resolve() not in existing_files),
-            key=lambda p: p.stat().st_mtime,
-            reverse=True,
-        )
-        if not mp3_files:
-            raise RuntimeError(f"mp3 file not found after download for url: {url}")
-        found = mp3_files[0]
+    mp3_files = _new_downloaded_mp3s(output_dir, existing_files)
+    if not mp3_files:
+        raise RuntimeError(f"mp3 file not found after download for url: {url}")
 
-    title = str(info.get("title") or info.get("track") or found.stem).strip()
-    uploader = str(info.get("uploader") or info.get("channel") or info.get("channel_name") or "").strip()
+    entries = [entry for entry in (info.get("entries") or []) if isinstance(entry, dict)]
+    is_playlist_download = playlist_requested and len(mp3_files) > 1 and bool(entries)
+    if is_playlist_download:
+        ordered_files = _ordered_playlist_files(mp3_files, info)
+        found = output_dir / f"{file_stub}-playlist.mp3"
+        merge_mp3_files(ordered_files, found, loudnorm_enabled=False, ffmpeg_path=ffmpeg_path)
+        for path in mp3_files:
+            path.unlink(missing_ok=True)
+    else:
+        found = sorted(mp3_files, key=lambda p: p.stat().st_mtime, reverse=True)[0]
+
+    title = str(info.get("title") or info.get("playlist_title") or info.get("track") or found.stem).strip()
+    uploader = str(
+        info.get("uploader")
+        or info.get("channel")
+        or info.get("channel_name")
+        or info.get("playlist_uploader")
+        or ""
+    ).strip()
     video_id = str(info.get("id") or "").strip()
     video_url = str(info.get("webpage_url") or url).strip()
     if not video_url and video_id:
@@ -439,7 +491,7 @@ def download_youtube_url(
             uploader=uploader,
             score=0,
             confidence="direct",
-            reason="manual-url",
+            reason="manual-playlist-url" if is_playlist_download else "manual-url",
         ),
     )
 

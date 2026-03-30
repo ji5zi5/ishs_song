@@ -696,21 +696,6 @@
           </div>
         </div>
         <div class="status-box" id="maintenanceStatus" aria-live="polite">현재/최신 버전을 확인하는 중입니다.</div>
-        <div class="note">
-          <strong>유튜브 링크 직접 다운로드</strong><br />
-          회차 선정과 별개로 특정 유튜브 링크를 mp3로 받아서 바로 내려받을 수 있습니다.
-        </div>
-        <div class="inline">
-          <div>
-            <label for="manualYoutubeUrl">유튜브 링크</label>
-            <input id="manualYoutubeUrl" type="url" placeholder="https://youtu.be/..." />
-          </div>
-          <div style="display:flex; align-items:end;">
-            <button id="manualYoutubeDownloadBtn" type="button">직접 다운로드</button>
-          </div>
-        </div>
-        <div class="status-box" id="manualYoutubeStatus" aria-live="polite">최근 수동 다운로드 목록을 불러오는 중입니다.</div>
-        <div class="list" id="manualDownloadsList"></div>
       </article>
 
       <article class="panel audit-panel" aria-labelledby="audit-title">
@@ -727,6 +712,26 @@
         <div class="audit-scroll">
           <div class="list audit-list" id="auditList"></div>
         </div>
+      </article>
+
+      <article class="panel" aria-labelledby="manual-download-title" id="manualDownloadPanel" hidden>
+        <div class="panel-head">
+          <div>
+            <h2 id="manual-download-title">유튜브 직접 다운로드</h2>
+            <p class="muted">회차 선정과 별개로 특정 유튜브 링크를 mp3로 받아서 바로 내려받습니다.</p>
+          </div>
+        </div>
+        <div class="inline">
+          <div>
+            <label for="manualYoutubeUrl">유튜브 링크</label>
+            <input id="manualYoutubeUrl" type="url" placeholder="https://youtu.be/..." />
+          </div>
+          <div style="display:flex; align-items:end;">
+            <button id="manualYoutubeDownloadBtn" type="button">직접 다운로드</button>
+          </div>
+        </div>
+        <div class="status-box" id="manualYoutubeStatus" aria-live="polite">최근 수동 다운로드 목록을 불러오는 중입니다.</div>
+        <div class="list" id="manualDownloadsList"></div>
       </article>
     </section>
   </main>
@@ -1405,6 +1410,7 @@
       try {
         await requireAdmin();
         document.getElementById("maintenancePanel").hidden = false;
+        document.getElementById("manualDownloadPanel").hidden = false;
         await refreshAll();
         const closeState = await api("/api/admin/rounds/close-status");
         renderCloseState(closeState);

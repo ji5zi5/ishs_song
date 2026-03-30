@@ -86,7 +86,8 @@ class AdminUiTest(unittest.TestCase):
     def test_admin_page_exposes_manual_youtube_download_controls(self) -> None:
         html = (ROOT / "src" / "radio_app" / "static" / "admin.html").read_text(encoding="utf-8")
 
-        self.assertIn("유튜브 링크 직접 다운로드", html)
+        self.assertIn('id="manualDownloadPanel"', html)
+        self.assertIn("유튜브 직접 다운로드", html)
         self.assertIn('id="manualYoutubeUrl"', html)
         self.assertIn('id="manualYoutubeDownloadBtn"', html)
         self.assertIn('/api/admin/manual-downloads', html)
@@ -94,6 +95,7 @@ class AdminUiTest(unittest.TestCase):
         self.assertIn('/api/admin/manual-downloads/download', html)
         self.assertIn("manualDownloadEnabled", html)
         self.assertIn("유튜브 직접 다운로드가 비활성화되어 있습니다.", html)
+        self.assertIn('document.getElementById("manualDownloadPanel").hidden = false;', html)
 
     def test_admin_page_exposes_individual_track_download_controls(self) -> None:
         html = (ROOT / "src" / "radio_app" / "static" / "admin.html").read_text(encoding="utf-8")

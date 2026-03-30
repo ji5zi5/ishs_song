@@ -231,6 +231,9 @@ class AdminApiTest(unittest.TestCase):
         self.assertEqual(payload["latest_version"], "2026.4.1")
         self.assertTrue(payload["update_available"])
         self.assertTrue(payload["installed"])
+        self.assertTrue(payload["update_enabled"])
+        self.assertTrue(payload["manual_download_enabled"])
+        self.assertIsNone(payload["active_job"])
 
         status, _, payload = self._request_json("/api/admin/maintenance/yt-dlp", cookie=self.member_cookie)
         self.assertEqual(status, 403)
@@ -248,6 +251,9 @@ class AdminApiTest(unittest.TestCase):
         self.assertIsNone(payload["latest_version"])
         self.assertFalse(payload["update_available"])
         self.assertEqual(payload["latest_check_error"], "network down")
+        self.assertTrue(payload["update_enabled"])
+        self.assertTrue(payload["manual_download_enabled"])
+        self.assertIsNone(payload["active_job"])
 
     def test_admin_can_update_yt_dlp_and_audit_is_written(self) -> None:
         completed = mock.Mock()

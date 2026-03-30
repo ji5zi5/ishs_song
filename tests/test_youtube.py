@@ -15,6 +15,7 @@ if str(SRC) not in sys.path:
 from radio_app.db import DB, utc_now_iso
 from radio_app.services.youtube import (
     DownloadedAudio,
+    download_youtube_url,
     _rank_candidate,
     _sanitize_filename,
     ensure_audio_for_songs,
@@ -541,6 +542,97 @@ class SearchAndDownloadTest(unittest.TestCase):
 
             self.assertEqual(got.candidate.video_id, "weak2")
             self.assertIn(got.candidate.confidence, {"good", "weak"})
+
+
+class DirectUrlDownloadTest(unittest.TestCase):
+    def test_download_youtube_url_keeps_single_video_as_single_mp3(self) -> None:
+        class FakeDL:
+            def __init__(self, opts) -> None:
+                self.opts = opts
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> bool:
+                return False
+
+            def extract_info(self, url, download=True):
+                self_url = str(url)
+                out = Path(str(self.opts["outtmpl"]).replace("%(ext)s", "mp3").replace("%(id)s", "abc123"))
+                out.write_bytes(b"single-track")
+                return {
+                    "id": "abc123",
+                    "title": "Single Song",
+                    "uploader": "Single Channel",
+                    "webpage_url": self_url,
+                }
+
+        fake_mod = types.SimpleNamespace(YoutubeDL=FakeDL)
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td)
+            with patch.dict("sys.modules", {"yt_dlp": fake_mod}):
+                got = download_youtube_url("https://youtu.be/abc123", out)
+
+            self.assertTrue(got.path.exists())
+            self.assertEqual(got.path.read_bytes(), b"single-track")
+            self.assertEqual(got.candidate.video_id, "abc123")
+            self.assertEqual(got.candidate.title, "Single Song")
+
+    def test_download_youtube_url_merges_playlist_into_single_mp3(self) -> None:
+        merge_inputs: list[Path] = []
+        merge_output: Path | None = None
+
+        class FakeDL:
+            def __init__(self, opts) -> None:
+                self.opts = opts
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> bool:
+                return False
+
+            def extract_info(self, url, download=True):
+                output_dir = Path(str(self.opts["outtmpl"])).parent
+                (output_dir / "part-01.mp3").write_bytes(b"first")
+                (output_dir / "part-02.mp3").write_bytes(b"second")
+                return {
+                    "id": "PL123",
+                    "title": "My Playlist",
+                    "uploader": "Playlist Owner",
+                    "webpage_url": str(url),
+                    "entries": [
+                        {"id": "vid1", "title": "Song 1"},
+                        {"id": "vid2", "title": "Song 2"},
+                    ],
+                }
+
+        def fake_merge(file_paths, output_path, loudnorm_enabled, ffmpeg_path=None):
+            nonlocal merge_output
+            merge_inputs[:] = list(file_paths)
+            merge_output = output_path
+            output_path.write_bytes(b"merged")
+            return "merged-with-ffmpeg"
+
+        fake_mod = types.SimpleNamespace(YoutubeDL=FakeDL)
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td)
+            with (
+                patch.dict("sys.modules", {"yt_dlp": fake_mod}),
+                patch("radio_app.services.youtube.merge_mp3_files", side_effect=fake_merge, create=True),
+            ):
+                got = download_youtube_url("https://www.youtube.com/playlist?list=PL123", out)
+
+            self.assertIsNotNone(merge_output)
+            self.assertEqual(got.path, merge_output)
+            self.assertTrue(got.path.exists())
+            self.assertEqual(got.path.read_bytes(), b"merged")
+            self.assertEqual(got.candidate.video_id, "PL123")
+            self.assertEqual(got.candidate.title, "My Playlist")
+            self.assertEqual(got.candidate.uploader, "Playlist Owner")
+            self.assertEqual([path.name for path in merge_inputs], ["part-01.mp3", "part-02.mp3"])
+            self.assertFalse((out / "part-01.mp3").exists())
+            self.assertFalse((out / "part-02.mp3").exists())
 
 
 class EnsureAudioForSongsTest(unittest.TestCase):
